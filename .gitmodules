@@ -1,0 +1,3 @@
+[submodule "vcf-fusion"]
+	path = vcf-fusion
+	url = git@github.com:FINNGEN/vcf-fusion.git
