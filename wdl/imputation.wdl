@@ -243,12 +243,17 @@ task batch_qc {
             mv $file .; mv ${dollar}{file/\.bed/\.bim} .; mv ${dollar}{file/\.bed/\.fam} .
         done
 
-        # merge chrs excluding variants that did not pass joint qc or panel comparison
+        # get samples in data to exclude by given list not counting the same sample more than once
+        # TODO using sex check fam here because samples may have been excluded earlier and we want to list all excluded samples here
+        awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} | grep -E "${include_regex}" | \
+        awk 'BEGIN{OFS="\t"} {print $1,$2,"NA"}' | sort -u >> ${base}.samples_exclude.txt
+
+        # merge chrs excluding variants that did not pass joint qc or panel comparison and samples in given list
         echo -e "`date`\tmerge"
         ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
+        $plink_cmd --merge-list mergelist.txt --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt) --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
 
-        # get initial missingness for all samples
+        # get initial missingness for all remaining samples
         $plink2_cmd --bfile ${base} --missing --out missing
         cp missing.smiss ${base}.raw.smiss
 
@@ -274,9 +279,6 @@ task batch_qc {
             <(awk 'BEGIN{OFS="\t"} NR==1 {print "IID","SSN_SEX"} NR>1 {print $1,$2}' ${ssn_sex} | sort -k1,1) | \
             sort -k2,2g | cut -f1,3- | awk 'NR>1&&$2!=$3 {OFS="\t"; print $1,"sex_check_ssn","NA"}' >> ${base}.samples_exclude.txt
         fi
-
-        # get samples to exclude by given list
-        cat ${exclude_samples} | grep -E "${include_regex}" | awk 'BEGIN{OFS="\t"} {print $1,"given_list",$2}' >> ${base}.samples_exclude.txt
 
         # remove samples not passing sex check and given samples and filter by hw
         echo -e "`date`\thwe"

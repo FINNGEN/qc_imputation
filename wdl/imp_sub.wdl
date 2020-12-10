@@ -130,6 +130,7 @@ task post_imputation {
 	File annot_tab
 	File annot_tab_index
 	String annot_col_incl
+    String dollar = "$"
 
     command <<<
 
@@ -147,11 +148,16 @@ task post_imputation {
         >> ${base}_varID_AF_INFO_GROUP.txt
         Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
 
-        # annotate and index
+        # annotate, edit tags and index
+        [[ ${base} =~ (.*)_chr[0-9]+ ]]
+        batch=${dollar}{BASH_REMATCH[1]}
+        edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch AR2: DR2: IMP:"
         bcftools index -t -f ${base}_imputed_infotags.vcf.gz
 		bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
-		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Oz -o ${base}_imputed_annotated.vcf.gz
-        bcftools index -t -f ${base}_imputed_annotated.vcf.gz
+		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Ov | \
+        java -jar /tools/tagEditing_v1.1.jar $edits | \
+        bgzip > ${base}_tags_edited.vcf.gz
+        bcftools index -t -f ${base}_tags_edited.vcf.gz
 
     >>>
 
@@ -164,9 +170,9 @@ task post_imputation {
     }
 
     output {
-        File out_imputed_annotated = "${base}_imputed_annotated.vcf.gz"
-        File out_imputed_annotated_index = "${base}_imputed_annotated.vcf.gz.tbi"
         File out_varid_af_info_group = "${base}_varID_AF_INFO_GROUP.txt"
+        File tags_edited = base + "_tags_edited.vcf.gz"
+        File tags_edited_tbi = base + "_tags_edited.vcf.gz.tbi"
         Array[File] png = glob("*.png")
     }
 }
