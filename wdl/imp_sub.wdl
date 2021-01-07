@@ -7,6 +7,8 @@ workflow imputation {
     String exclude_samples
     Int n_batches = length(batch_qc_exclude_variants)
 
+    File? exclude_denials
+
     scatter (i in range(n_batches)) {
         call plink_to_vcf {
             input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants, batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples
@@ -17,6 +19,10 @@ workflow imputation {
         call post_imputation {
             input: chr=chr, vcf=phase_impute.out_imputed
         }
+    }
+
+    output {
+        Array[File] vcfs = post_imputation.tags_edited
     }
 }
 
@@ -39,7 +45,7 @@ task plink_to_vcf {
 
         # convert to vcf
         cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) | sort -u > exclude_variants.txt
-        awk '$1==${base} && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
+        awk -v base=${base} '$1==base && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
         $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --remove exclude_samples.txt --exclude exclude_variants.txt --make-bed --out temp
         # remove _dup suffix from fam
         sed -i 's/_dup[0-9]\+//' temp.fam
