@@ -11,6 +11,7 @@
     "qc_imputation.chrs": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
     "qc_imputation.genome_build": 38,
     "qc_imputation.panel_comparison.p": 5e-8,
+    "qc_imputation.exclude_denials": "gs://r7_data/R7_pilot_runs/legacy/DS10_FINRISK_DS11_FINRISK_first_10_excl",
     "qc_imputation.high_ld_regions": "gs://finngen-imputation-panel/high-LD-regions-b38-merged.plink.txt",
     "qc_imputation.chr_qc.vcf_to_bed_chr.ref_fasta": "gs://finngen-imputation-panel/hg38_v0_Homo_sapiens_assembly38.fasta",
     "qc_imputation.chr_qc.compare_panel.panel_freq": "gs://finngen-imputation-panel/sisu3/SISu_v3_reference_panel.frq",
