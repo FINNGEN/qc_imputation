@@ -138,6 +138,7 @@ task paste {
 
     output {
         File out = outfile
+        File idx = outfile + ".tbi"
     }
     runtime {
         docker: "${docker}"
