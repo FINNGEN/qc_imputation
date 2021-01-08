@@ -5,11 +5,14 @@ workflow subset_samples {
     Array[File] vcfs
     Array[File] vcf_idxs
     File? exclude_samples
+    String docker
 
     scatter( b in range(length(vcfs)) ) {
         ## add task that figures out which of same person with different IDs to remove and pass to next task.
         ## good to make all this optional for other imputation tasks, at least at some point.
-        call subset { input: vcf=vcfs[b], vcf_idx=vcf_idxs[b], exclude_samples=exclude_samples}
+        call subset { input: vcf=vcfs[b], vcf_idx=vcf_idxs[b], exclude_samples=exclude_samples,
+            docker=docker
+        }
     }
 
     output {
@@ -21,7 +24,7 @@ task subset {
     File vcf
     File vcf_idx
     File? exclude_samples
-
+    String docker
     String bn=basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
 
     command <<<
@@ -46,7 +49,7 @@ task subset {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "7 GB"
         cpu: 1
         disks: "local-disk 200 HDD"

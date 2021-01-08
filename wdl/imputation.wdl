@@ -18,7 +18,7 @@ workflow qc_imputation {
     String include_regex
     Int genome_build
     File high_ld_regions
-
+    String docker
     Array[Float] f
 
     File? exclude_denials
@@ -41,7 +41,7 @@ workflow qc_imputation {
         call qc_sub.chr_qc as chr_qc {
             input: exclude_samples_loc=exclude_samples_loc,
                 vcf_loc=vcf_loc,name=name, chr=chr, panel_vcf=ref_panel[chr], include_regex=include_regex,
-                Fs=f,genome_build=genome_build, high_ld_regions=high_ld_regions
+                Fs=f,genome_build=genome_build, high_ld_regions=high_ld_regions, docker=docker
         }
     }
     # run qc per batch across all chromosomes
@@ -50,20 +50,21 @@ workflow qc_imputation {
         # combine panel comparison across chrs and create plot
         call panel_comparison {
             input: base=base1, freq=transpose(chr_qc.freq)[i], freq_panel=transpose(chr_qc.freq_panel)[i],
-            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i]
+            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i],
+            docker=docker
         }
         # run qc
         call batch_qc {
             input: base=base1, beds=transpose(chr_qc.out_beds)[i], bims=transpose(chr_qc.out_bims)[i], fams=transpose(chr_qc.out_fams)[i],
             fam_sexcheck=fams_sexcheck[i], exclude_variants_joint=chr_qc.exclude_variants, exclude_variants_panel=panel_comparison.exclude_variants,
             genome_build=genome_build, exclude_samples=exclude_samples[i],
-            f=f, include_regex=include_regex,
-            high_ld_regions=high_ld_regions
+            f=f, include_regex=include_regex,high_ld_regions=high_ld_regions, docker=docker
         }
     }
     # get duplicates (_dup or same ID) to remove across batches
     call duplicates {
-        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude, sample_missingness=batch_qc.sample_missingness
+        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude,
+        sample_missingness=batch_qc.sample_missingness, docker=docker
     }
 
     # create plots per batch
@@ -76,7 +77,7 @@ workflow qc_imputation {
             sample_missingness=[batch_qc.sample_missingness[i]], pihat_n=[batch_qc.pihat_n[i]],
             pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
             sample_missing=batch_qc.sample_missing_threshold[i],
-            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i]
+            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
         }
     }
     # create plots across all batches
@@ -87,7 +88,7 @@ workflow qc_imputation {
         sample_missingness=batch_qc.sample_missingness, pihat_n=batch_qc.pihat_n,
         pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
         sample_missing=batch_qc.sample_missing_threshold[0],
-        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0]
+        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
     }
 
     if (run_imputation) {
@@ -101,14 +102,15 @@ workflow qc_imputation {
             ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
             ### add logic to subwf
             call post_subset_sub.subset_samples as subset_samples{
-                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, exclude_samples=exclude_denials
+                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, exclude_samples=exclude_denials, docker=docker
             }
         }
 
         if ( length(vcfs)>1 ) {
             scatter (i in range(length(chrs))) {
                 call paste {
-                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz"
+                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
+                     docker=docker
                 }
             }
         }
@@ -126,19 +128,19 @@ task paste {
     String dollar = "$"
     String storage="local-disk 300 HDD"
     Int cpus = 32
-
+    String docker
 
     command <<<
         echo "Execute vcf-fusion&paste&bgzip command"
         time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
-        ### add tabix tool to docker.
+        tabix -p vcf ${outfile}
     >>>
 
     output {
         File out = outfile
     }
     runtime {
-        docker: "gcr.io/finngen-refinery-dev/rust-paste-poc:c9558a2"
+        docker: "${docker}"
         memory: "12 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
@@ -154,6 +156,7 @@ task panel_comparison {
     Array[File] files_glm
     Array[File] exclude_variants_panel
     Float p
+    String docker
 
     command <<<
 
@@ -264,7 +267,7 @@ task panel_comparison {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "7 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
@@ -297,6 +300,8 @@ task batch_qc {
     Int pi_hat_min_n_excess
     Int pi_hat_min_n
     String dollar = "$"
+    String docker
+
 
     command <<<
         set -euo pipefail
@@ -441,7 +446,7 @@ task batch_qc {
     >>>
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "10 GB"
         cpu: 4
         disks: "local-disk 200 HDD"
@@ -481,6 +486,7 @@ task duplicates {
     Array[File] samples_exclude
     Array[File] sample_missingness
     String dollar = "$"
+    String docker
 
     command <<<
 
@@ -532,7 +538,7 @@ task duplicates {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "1 GB"
         cpu: 1
         disks: "local-disk 100 HDD"
@@ -558,6 +564,7 @@ task plots {
     Float sample_missing
     Float het_sd
     Int pi_hat_min_n
+    String docker
 
     #Array[File] original_bims
     command <<<
@@ -702,7 +709,7 @@ task plots {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "3 GB"
         cpu: 1
         disks: "local-disk 100 HDD"

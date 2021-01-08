@@ -1,4 +1,5 @@
 {
+    "qc_imputation.docker":"gcr.io/finngen-refinery-dev/qc_imputation:0.01",
     "qc_imputation.name": "r7_legacy",
     "qc_imputation.run_imputation": true,
     "qc_imputation.chr_qc.joint_qc.run_joint_qc": true,

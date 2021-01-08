@@ -10,12 +10,12 @@ workflow chr_qc {
     String include_regex
     Array[Float] Fs
     Int genome_build
-
+    String docker
     File high_ld_regions
 
     scatter (i in range(length(vcfs))) {
         call vcf_to_bed_chr {
-            input: chr=chr, vcf=vcfs[i], exclude_samples=exclude_samples[i], include_regex=include_regex
+            input: chr=chr, vcf=vcfs[i], exclude_samples=exclude_samples[i], include_regex=include_regex,docker=docker
         }
         call compare_panel {
             input: chr=chr, bed=vcf_to_bed_chr.out_bed, panel_vcf=panel_vcf,high_ld_regions=high_ld_regions
@@ -27,7 +27,7 @@ workflow chr_qc {
         ### remove completely if missingness per batch is high.
         input: chr=chr, outname=name+"_chr"+chr, beds=vcf_to_bed_chr.out_bed,
         bims=vcf_to_bed_chr.out_bim, fams=vcf_to_bed_chr.out_fam, Fs=Fs,  genome_build=genome_build,
-        exclude_upstream_variants=vcf_to_bed_chr.exclude_variants
+        exclude_upstream_variants=vcf_to_bed_chr.exclude_variants, docker=docker
     }
 
     output {
@@ -53,6 +53,8 @@ task vcf_to_bed_chr {
     File exclude_samples
     String include_regex
     File ref_fasta
+
+    String docker
 
     command <<<
 
@@ -101,7 +103,7 @@ task vcf_to_bed_chr {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "3 GB"
         cpu: 4
         disks: "local-disk 200 HDD"
@@ -130,6 +132,7 @@ task compare_panel {
     File high_ld_regions
     Float variant_missing_for_pca = 0.02
     Float hwe_for_pca = 0.000001
+
     command <<<
 
         set -euxo pipefail
@@ -230,6 +233,7 @@ task joint_qc {
     Float variant_missing_overall
     Float variant_missing_single_batch ## if any single batch has higher than this, all removed.
     String dollar = "$"
+    String docker
 
     command <<<
 
@@ -331,7 +335,7 @@ task joint_qc {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "24 GB"
         cpu: 6
         disks: "local-disk 500 HDD"
