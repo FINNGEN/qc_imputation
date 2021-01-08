@@ -87,7 +87,7 @@ workflow qc_imputation {
         sample_missingness=batch_qc.sample_missingness, pihat_n=batch_qc.pihat_n,
         pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
         sample_missing=batch_qc.sample_missing_threshold[0],
-        f=f, het_sd=batch_qc.het_sd_threshold, pi_hat_min_n=batch_qc.pi_hat_min_n_threshold
+        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0]
     }
 
     if (run_imputation) {
@@ -101,9 +101,8 @@ workflow qc_imputation {
             ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
             ### add logic to subwf
             call post_subset_sub.subset_samples as subset_samples{
-                input: vcfs=imputation.vcfs, exclude_samples=exclude_denials
+                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, exclude_samples=exclude_denials
             }
-
         }
 
         if ( length(vcfs)>1 ) {
@@ -132,6 +131,7 @@ task paste {
     command <<<
         echo "Execute vcf-fusion&paste&bgzip command"
         time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
+        ### add tabix tool to docker.
     >>>
 
     output {

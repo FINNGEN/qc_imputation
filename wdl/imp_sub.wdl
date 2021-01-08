@@ -23,6 +23,7 @@ workflow imputation {
 
     output {
         Array[File] vcfs = post_imputation.tags_edited
+        Array[File] vcf_idxs = post_imputation.tags_edited_tbi
     }
 }
 
