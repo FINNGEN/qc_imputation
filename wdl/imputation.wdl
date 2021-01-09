@@ -567,10 +567,10 @@ task plots {
     Int pi_hat_min_n
     String docker
 
+
     #Array[File] original_bims
     command <<<
         set -euxo pipefail
-
 
         # concat variants if not creating joint plots
         if ! ${joint}; then
@@ -590,6 +590,15 @@ task plots {
         fi
         for file in ${sep=" " exclude_variants}; do mv $file .; done
         awk '{OFS="\t"; sub(".variants_exclude.txt", "", FILENAME); print FILENAME,$0}' *variants_exclude.txt | grep -Ev "not_in_panel|af_panel" > excluded_variants
+
+
+        ## GET VARIANTS THAT ARE in joint_qc_ but not anywhere else to report what gets removed in joint but not elsewhere
+        ###!!!SUMMARIZE DATA.... might be good move to separate script for clarity at some point
+         awk ' {  if(match($3,"^joint_qc")) { jointout[$2]=$0;} else { batchout[$2]=$2} } \
+            END{ for(v in jointout) { if (!(v in batchout) && !printed[v]++) { print $0}  } }' excluded_variants > variants_excluded_in_joint_only
+
+        #####
+
 
         ## create summary table of per batch variants and samples removed.
         ## need also fams/orig sample ids per batch.
@@ -707,6 +716,7 @@ task plots {
 
     output {
         Array[File] png = glob("*.png")
+        File joint_qc_exclude_vars="variants_excluded_in_joint_only"
     }
 
     runtime {
