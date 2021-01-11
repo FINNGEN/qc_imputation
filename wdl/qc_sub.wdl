@@ -265,7 +265,7 @@ task joint_qc {
                 } \
                 NR>1 { \
                     if($h["F_MISS"]>${variant_missing_single_batch}) { \
-                        print $h["SNP"],"joint_qc_batch_high_missing","batch:"$h["F_MISS"]
+                        print $h["SNP"],"joint_qc_batch_high_missing",batch":$h["F_MISS"]
                     }\
                 } \
                 ' $bn".lmiss" >> ${outname}.exclude_variants.txt
@@ -287,7 +287,7 @@ task joint_qc {
             if (af2<${af}) print id,"alleleB_frequency",af2;
             if ($h["chromosome"] !~ "(chr)?X|23" && hw<${hw}) print id,"HW_exact_p_value",hw;
             if (miss>${variant_missing_overall}) print id,"missing_proportion",miss;
-        }' > ${outname}.exclude_variants.txt
+        }' >> ${outname}.exclude_variants.txt
 
         if [[ "${chr}" -eq 23 ]];
         then
@@ -324,7 +324,6 @@ task joint_qc {
 
         ## add all variants that failed in original conversion from vcf to plink ( practically non-PASS in any batch)
         awk 'BEGIN{ OFS="\t"} !seen[$0]++' ${sep=" " exclude_upstream_variants} >> ${outname}.exclude_variants.txt
-
         echo -e "`date`\tdone"
 
     >>>

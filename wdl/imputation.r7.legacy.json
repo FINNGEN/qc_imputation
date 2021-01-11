@@ -23,7 +23,7 @@
     "qc_imputation.chr_qc.joint_qc.af": 0,
     "qc_imputation.chr_qc.joint_qc.hw": 1e-10,
     "qc_imputation.chr_qc.joint_qc.variant_missing_overall": 1,
-    "qc_imputation.chr_qc.joint_qc.variant_missing_single_batch": 0.2,
+    "qc_imputation.chr_qc.joint_qc.variant_missing_single_batch": 0.03,
     "qc_imputation.f": [0.4, 0.7],
     "qc_imputation.batch_qc.ssn_sex": "gs://r7_data/qc/finngen_individuals_and_gender.txt.18112020",
     "qc_imputation.batch_qc.pi_hat": 0.1,

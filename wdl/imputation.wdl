@@ -635,8 +635,6 @@ task plots {
                 echo $batch >> batches
             done
 
-            ls -latr
-
             Rscript - <<EOF
             require(data.table)
             require(tidyverse)
