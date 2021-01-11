@@ -72,9 +72,10 @@ workflow qc_imputation {
         String base2 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
         call plots {
             input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]],
-            exclude_samples=duplicates.allbatches_samples_exclude,
+            exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
             exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]],
-            sample_missingness=[batch_qc.sample_missingness[i]], pihat_n=[batch_qc.pihat_n[i]],
+            sample_missingness=[batch_qc.sample_missingness[i]], sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
+            pihat_n=[batch_qc.pihat_n[i]],
             pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
             sample_missing=batch_qc.sample_missing_threshold[i],
             f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
@@ -83,9 +84,9 @@ workflow qc_imputation {
     # create plots across all batches
     call plots as joint_plots {
         input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
-        exclude_samples=duplicates.allbatches_samples_exclude,
+        exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=batch_qc.all_batch_var_freq,
         exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness,
-        sample_missingness=batch_qc.sample_missingness, pihat_n=batch_qc.pihat_n,
+        sample_missingness=batch_qc.sample_missingness, sample_missingness_raw=batch_qc.sample_missingness_raw, pihat_n=batch_qc.pihat_n,
         pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
         sample_missing=batch_qc.sample_missing_threshold[0],
         f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
@@ -349,6 +350,7 @@ task batch_qc {
             >2& echo "samples differ between ${fam_sexcheck} and ${base}.fam"
             exit 1
         fi
+
         echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
         $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out plink_data
@@ -368,8 +370,18 @@ task batch_qc {
         echo -e "`date`\thwe"
         $plink2_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) \
               --hardy --hwe ${hw} --make-bed --out plink_data_after_hwe
-        awk 'NR>1&&$10<${hw} {OFS="\t"; print $2,"hwe",$10}' plink_data_after_hwe.hardy >> ${base}.variants_exclude.txt
+        awk ' NR==1{ for(i=1;i<=NF;i++)  { h[$i]=i; if((!"ID" in h) || (! "P" in h)) { print "ID and P fields expected in HARDY" >>"/dev/stderr"; exit 1} } }  \
+            NR>1&&$h["P"]<${hw} {OFS="\t"; print $h["ID"],"hwe",$h["P"]}' plink_data_after_hwe.hardy >> ${base}.variants_exclude.txt
         cp plink_data_after_hwe.hardy ${base}.hardy
+
+        awk '$4==2{ print $1,$2}' ${base}.sexcheck > genetic_females
+        $plink_cmd --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) --bfile ${base} \
+            --chr 23 --keep genetic_females --hardy --out females_only
+        awk 'NR==1{ for(i=1;i<=NF;i++)  { h[$i]=i; if((!"SNP" in h) || (! "P" in h)) { print "ID and P fields expected in HARDY" >>"/dev/stderr"; exit 1} } } \
+            NR>1&&$h["P"]<${hw} {OFS="\t"; print $h["SNP"],"hwe",$h["P"]}' females_only.hwe >> ${base}.variants_exclude.txt
+        #awk '{$5==2; print $0}' females_only.fam
+            ## set the to fam females as for genotyping quality purposes they can be used even if sample mixup
+
 
         echo "remove variants by missingness"
         echo -e "`date`\tmissingness"
@@ -437,13 +449,26 @@ task batch_qc {
 
         echo "add variants from joint qc comparison to exclusion"
 
+        for file in ${sep=" " bims}; do
+            bn=$(basename $file)
+            cut -f2 $bn >> all_batch_variants
+        done
+
         ## adding variants only once per batch for each reason (not looking for 3rd column, value of the failure as those can be from different batches.)
         for file in ${sep=" " exclude_variants_joint}; do cat $file >> joint_variant_exclusions; done
-        cut -f2 *.bim | sort | uniq > all_batch_variants
         awk 'BEGIN{OFS="\t"} NR==FNR{ exists[$1]=1 }  \
             NR>FNR&&($1 in exists)&&(!dups[$1$2]++){ print $1,"joint_qc_"$2,$3} ' \
         all_batch_variants joint_variant_exclusions >> ${base}.variants_exclude.txt
 
+        ## create frq per batch to getoriginal variants in a batch and their AF
+        echo "ID AF" > ${base}.frq
+        for chr in ${sep=" " beds};
+        do
+            bn=$(basename $chr)
+            $plink2_cmd --bfile ${dollar}{bn%.bed} --freq --out ${dollar}{bn%.bed}
+            awk 'NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if ((!"ID" in h) || (! "ALT_FREQS" in h )) {print "ID and ALT_FREQS columns expected in .afreq file." >>"/dev/stderr"; exit 1;} } \
+                NR>1{ print $h["ID"],$h["ALT_FREQS"]}' ${dollar}{bn%.bed}".afreq" >> ${base}.frq
+        done
     >>>
 
     runtime {
@@ -468,8 +493,7 @@ task batch_qc {
         File pihat_n_raw = base + ".pihat_n_raw.txt"
         File pihat_n = base + ".pihat_n.txt"
         File hardy = base + ".hardy"
-        File all_batch_vars = "all_batch_variants"
-
+        File all_batch_var_freq = base + ".frq"
         # moved these here so these thresholds are defined in this task where they are used
         # instead of in the global level where it can be unclear where they are used.
         # For plotting etc. use whatever is reported from this task.
@@ -555,9 +579,11 @@ task plots {
     Array[File] sexcheck
     Array[File] variant_missingness
     Array[File] sample_missingness
+    Array[File] sample_missingness_raw # before removing anything else besides denials.
     Array[File] heterozygosity
     Array[File] pihat_n
     Array[File] pihat_n_raw
+    Array[File] all_batch_var_freq
     File exclude_samples
     Array[File] exclude_variants
     Array[Float] f
@@ -567,6 +593,7 @@ task plots {
     Int pi_hat_min_n
     String docker
 
+    String dollar="$"
 
     #Array[File] original_bims
     command <<<
@@ -597,6 +624,77 @@ task plots {
          awk ' {  if(match($3,"^joint_qc")) { jointout[$2]=$0;} else { batchout[$2]=$2} } \
             END{ for(v in jointout) { if (!(v in batchout) && !printed[v]++) { print $0}  } }' excluded_variants > variants_excluded_in_joint_only
 
+            for file in ${sep=" " all_batch_var_freq}; do mv $file .; done
+            for file in ${sep=" " sample_missingness}; do mv $file .; done
+
+            for file in ${sep=" " sample_missingness_raw}; do mv $file .; done
+
+            for batch_excl in *variants_exclude.txt;
+            do
+                batch=${dollar}{batch_excl%.variants_exclude.txt}
+                echo $batch >> batches
+            done
+
+            ls -latr
+
+            Rscript - <<EOF
+            require(data.table)
+            require(tidyverse)
+            require(ggplot2)
+
+            batches <- fread("batches", header = F)[["V1"]]
+
+            excl_samples <- fread("excluded_samples", header=F) %>%
+              rename(batch=V1,id=V2,reason=V3,value=V4)
+
+            pdf("${name}_excluded_variants.pdf")
+
+            summaries <- list()
+
+            for (b in batches) {
+              all_vars <- fread(paste0(b,".frq"))
+              excluded <- fread(paste0(b,".variants_exclude.txt"), header=F) %>%
+                rename(ID=V1, reason=V2, value=V3)
+
+              sample_missingness_raw <- fread(paste0(b,".raw.imiss"))
+
+              n_vars_total <- nrow(all_vars)
+
+              all_and_excl <- all_vars %>% left_join(excluded, by=c("ID"="ID"))
+
+              all_and_excl\$MAF<- ifelse( all_and_excl\$AF>0.5, 1-all_and_excl\$AF, all_and_excl\$AF )
+
+
+              n_vars_excluded <- length(unique(subset(all_and_excl, !is.na(reason))[["ID"]]))
+              samples_excluded <- excl_samples[ excl_samples\$batch==b,]
+
+              n_samples <- nrow(sample_missingness_raw)
+
+              var_causes <- excluded %>% dplyr::count(reason)
+              sample_causes <- samples_excluded %>% dplyr::count(reason)
+
+              var_causes <- paste(var_causes\$reason,var_causes\$n,sep="=", collapse=";")
+
+              sample_causes <- paste(sample_causes\$reason,sample_causes\$n,sep="=",collapse=";")
+
+              n_samples_excluded <- nrow(samples_excluded)
+
+              summaries[[length(summaries)+1]] <- data.frame(batch=b, original_vars=n_vars_total,
+                                                             excluded_vars = n_vars_excluded,n_samples=n_samples,
+                                                             n_sample_excl=n_samples_excluded, var_excl_reasons=var_causes,
+                                                             sample_excl_reasons=sample_causes)
+              p<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_density(aes(x=MAF, colour=reason))
+              p <- p + labs(title=paste0(b,".\n Original variants:", n_vars_total ,", removed vars:",n_vars_excluded))
+              plot(p)
+              p<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_density(aes(x=MAF, colour=reason))
+              p <- p + labs(title=paste0(b,".\n Original variants:", n_vars_total ,", removed vars:",n_vars_excluded))
+              plot(p)
+            }
+            sums <- do.call(rbind, summaries)
+            write.table(sums,"${name}_batch_summaries.txt",sep="\t", row.names=F, quote=F)
+        EOF
+            ## pass panel AF here and plot removed variants by AF.
+            ## summarize number of snps originally and how many are left in each batch and per batch counts of failures.
         #####
 
 
@@ -717,6 +815,9 @@ task plots {
     output {
         Array[File] png = glob("*.png")
         File joint_qc_exclude_vars="variants_excluded_in_joint_only"
+
+        File summaries=name + "_batch_summaries.txt"
+        File exclude_vars_dists=name + "_excluded_variants.pdf"
     }
 
     runtime {
