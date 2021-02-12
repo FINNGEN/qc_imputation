@@ -1,0 +1,7 @@
+{
+    "submerge.docker":"gcr.io/finngen-refinery-dev/qc_imputation:0.01",
+    "submerge.basename": "finngen_R7_chr",
+    "submerge.chrs": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+    "submerge.remove_samples": "gs://r7_data/qc_imp/finngen_R7_final_sample_removals",
+    "submerge.per_chr_batch_files": "gs://r7_data/qc_imp/finngen_R7_all_batches_per_chr"
+}

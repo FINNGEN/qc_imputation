@@ -22,7 +22,7 @@ workflow qc_imputation {
     Array[Float] f
 
     File? exclude_denials
-
+    File? duplicate_samples
     ## could compute a single PCA for all samples in panel and across batches and pass the PCs forward to per chr qc.
     ## Now the PCA uses only single chromosome variants in chr_qc... probably not gonna make a huge difference but that should be the correct way.
     ## it is not crucial/detrimental though as failing to account for structure in panel comparison will only remove variants that might be region specific
@@ -81,6 +81,7 @@ workflow qc_imputation {
             f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
         }
     }
+
     # create plots across all batches
     call plots as joint_plots {
         input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
@@ -103,9 +104,12 @@ workflow qc_imputation {
             ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
             ### add logic to subwf
             call post_subset_sub.subset_samples as subset_samples{
-                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, exclude_samples=exclude_denials, docker=docker
+                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
+                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+                docker=docker
             }
         }
+
 
         if ( length(vcfs)>1 ) {
             scatter (i in range(length(chrs))) {
@@ -121,17 +125,15 @@ workflow qc_imputation {
 task paste {
 
     Array[File] vcfs
-    Array[File]? excl_vcf
-
-    Array[File]? to_merge = if defined(excl_vcf) then excl_vcf else vcfs
-
     String outfile
     String dollar = "$"
     String storage="local-disk 300 HDD"
     Int cpus = 32
     String docker
 
+
     command <<<
+        set -euxo pipefail
         echo "Execute vcf-fusion&paste&bgzip command"
         time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
         tabix -p vcf ${outfile}
@@ -142,10 +144,10 @@ task paste {
         File idx = outfile + ".tbi"
     }
     runtime {
-        docker: "${docker}"
+        docker: "gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
         memory: "12 GB"
-        cpu: 1
-        disks: "local-disk 200 HDD"
+        cpu: cpus
+        disks: "local-disk 300 HDD"
         preemptible: 0
     }
 }
@@ -382,7 +384,6 @@ task batch_qc {
         #awk '{$5==2; print $0}' females_only.fam
             ## set the to fam females as for genotyping quality purposes they can be used even if sample mixup
 
-
         echo "remove variants by missingness"
         echo -e "`date`\tmissingness"
         $plink2_cmd --bfile plink_data_after_hwe --geno ${variant_missing} --make-bed --out plink_data
@@ -595,7 +596,6 @@ task plots {
 
     String dollar="$"
 
-    #Array[File] original_bims
     command <<<
         set -euxo pipefail
 
@@ -618,7 +618,6 @@ task plots {
         for file in ${sep=" " exclude_variants}; do mv $file .; done
         awk '{OFS="\t"; sub(".variants_exclude.txt", "", FILENAME); print FILENAME,$0}' *variants_exclude.txt | grep -Ev "not_in_panel|af_panel" > excluded_variants
 
-
         ## GET VARIANTS THAT ARE in joint_qc_ but not anywhere else to report what gets removed in joint but not elsewhere
         ###!!!SUMMARIZE DATA.... might be good move to separate script for clarity at some point
          awk ' {  if(match($3,"^joint_qc")) { jointout[$2]=$0;} else { batchout[$2]=$2} } \
@@ -639,16 +638,18 @@ task plots {
             require(data.table)
             require(tidyverse)
             require(ggplot2)
+            require(ggpubr)
+
 
             batches <- fread("batches", header = F)[["V1"]]
 
             excl_samples <- fread("excluded_samples", header=F) %>%
               rename(batch=V1,id=V2,reason=V3,value=V4)
 
-            pdf("${name}_excluded_variants.pdf")
+            pdf("${name}_excluded_variants.pdf", width=14, height=12)
 
             summaries <- list()
-
+            sample_summaries <- list()
             for (b in batches) {
               all_vars <- fread(paste0(b,".frq"))
               excluded <- fread(paste0(b,".variants_exclude.txt"), header=F) %>%
@@ -662,7 +663,6 @@ task plots {
 
               all_and_excl\$MAF<- ifelse( all_and_excl\$AF>0.5, 1-all_and_excl\$AF, all_and_excl\$AF )
 
-
               n_vars_excluded <- length(unique(subset(all_and_excl, !is.na(reason))[["ID"]]))
               samples_excluded <- excl_samples[ excl_samples\$batch==b,]
 
@@ -671,25 +671,62 @@ task plots {
               var_causes <- excluded %>% dplyr::count(reason)
               sample_causes <- samples_excluded %>% dplyr::count(reason)
 
-              var_causes <- paste(var_causes\$reason,var_causes\$n,sep="=", collapse=";")
+              var_causes_comb <- paste(var_causes\$reason,var_causes\$n,sep="=", collapse=";")
 
-              sample_causes <- paste(sample_causes\$reason,sample_causes\$n,sep="=",collapse=";")
+              sample_causes_comb <- paste(sample_causes\$reason,sample_causes\$n,sep="=",collapse=";")
 
               n_samples_excluded <- nrow(samples_excluded)
 
-              summaries[[length(summaries)+1]] <- data.frame(batch=b, original_vars=n_vars_total,
-                                                             excluded_vars = n_vars_excluded,n_samples=n_samples,
-                                                             n_sample_excl=n_samples_excluded, var_excl_reasons=var_causes,
-                                                             sample_excl_reasons=sample_causes)
-              p<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_density(aes(x=MAF, colour=reason))
-              p <- p + labs(title=paste0(b,".\n Original variants:", n_vars_total ,", removed vars:",n_vars_excluded))
-              plot(p)
-              p<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_density(aes(x=MAF, colour=reason))
-              p <- p + labs(title=paste0(b,".\n Original variants:", n_vars_total ,", removed vars:",n_vars_excluded))
+              sample_missingness_raw\$n_excluded_vars <- n_vars_excluded
+              sample_missingness_raw\$n_vars_total <- n_vars_total
+
+              sample_missingness_raw\$batch <- b
+
+              sd <- sample_missingness_raw[,c("IID","batch","N_MISS","N_GENO","n_vars_total","n_excluded_vars")]
+              colnames(sd)[3] <- "N_MISS_in_batch_qc"
+              colnames(sd)[4] <- "N_GENO_in_batch_qc"
+
+              ## remove samples not in final data.
+              sd <- sd %>% dplyr::anti_join(excl_samples, by=c("IID"="id", "batch"="batch"))
+
+              sample_summaries[[length(sample_summaries)+1]] <-sd
+
+              d <-  data.frame(batch=b, original_vars=n_vars_total,
+                               excluded_vars = n_vars_excluded,n_samples=n_samples,
+                               n_sample_excl=n_samples_excluded, var_excl_reasons=var_causes_comb,
+                               sample_excl_reasons=sample_causes_comb)
+              summaries[[length(summaries)+1]] <-d
+
+
+              p1<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_histogram(aes(x=MAF, colour=reason), binwidth = 0.01, closed="left") +
+                xlab("MAF (binwidth 0.01)")
+
+              p2<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_histogram(aes(x=MAF, colour=reason), binwidth = 0.01, closed="left") +
+                  coord_cartesian(ylim=c(0,10000))  + xlab("MAF (binwidth 0.01)")
+
+
+              p3<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.001)+
+                  xlab("MAF (binwidth 0.001)")
+
+
+              p4<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.001)+
+                coord_cartesian(ylim=c(0,10000)) + xlab("MAF (binwidth 0.001)")
+
+
+              p5<-ggplot( subset(all_and_excl, !is.na(reason) & MAF <= 0.01)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.0005)+
+                coord_cartesian(ylim=c(0,10000)) + xlab("MAF (binwidth 0.0005)")
+
+
+              counts <- ggplot(var_causes) + geom_bar(aes(y=n, x=reason, colour=reason, fill=reason),stat="identity") +
+                  theme(axis.text.x = element_text(angle = 90)) + geom_text(aes(y=0, x=reason, label=n), angle=90, hjust = 0)
+              pcomb <- ggarrange(p1, p2, p3, p4,p5, counts , common.legend=T, legend="right")
+              p<-annotate_figure(pcomb, fig.lab=paste0(b,". Original variants:", n_vars_total ,", removed vars:",n_vars_excluded), fig.lab.pos="top.right",fig.lab.size=14)
               plot(p)
             }
             sums <- do.call(rbind, summaries)
+            sample_sums <- do.call(rbind, sample_summaries)
             write.table(sums,"${name}_batch_summaries.txt",sep="\t", row.names=F, quote=F)
+            write.table(sample_sums,"${name}_sample_summaries.txt",sep="\t", row.names=F, quote=F)
         EOF
             ## pass panel AF here and plot removed variants by AF.
             ## summarize number of snps originally and how many are left in each batch and per batch counts of failures.
@@ -813,10 +850,11 @@ task plots {
     output {
         Array[File] png = glob("*.png")
         File joint_qc_exclude_vars="variants_excluded_in_joint_only"
-
         File summaries=name + "_batch_summaries.txt"
+        File sample_summaries=name + "_sample_summaries.txt"
         File exclude_vars_dists=name + "_excluded_variants.pdf"
     }
+
 
     runtime {
         docker: "${docker}"

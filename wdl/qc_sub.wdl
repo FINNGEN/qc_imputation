@@ -265,7 +265,7 @@ task joint_qc {
                 } \
                 NR>1 { \
                     if($h["F_MISS"]>${variant_missing_single_batch}) { \
-                        print $h["SNP"],"joint_qc_batch_high_missing",batch":$h["F_MISS"]
+                        print $h["SNP"],"joint_qc_batch_high_missing",batch":"$h["F_MISS"]
                     }\
                 } \
                 ' $bn".lmiss" >> ${outname}.exclude_variants.txt
