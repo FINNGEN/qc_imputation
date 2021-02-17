@@ -44,7 +44,6 @@ Create configuration file using:
 scripts/generate_dedup_merge_conf.py hash1,hash2 duplicateids_file outprefix
 ```
 
-
 Parameters:
 1. comma separated list of cromwell job hashes
 2. file with duplicate ids for a single individual. Each row should have tab separated list of alternate genotyping IDs.
@@ -58,8 +57,10 @@ Example from R7 production runs:
 **Upload the created configuration files to bucket**
 
 Files:
-- {outprefix}_final_sample_removals`
-- {outprefix}_all_batches_per_chr`
+- {outprefix}_final_sample_removals . Add any sample IDs to be removed here in case additional removals are needed (e.g. samples in that are not in exclusions list).
+- {outprefix}_all_batches_per_chr
+
+
 
 In our example:
 - finngen_R7_final_sample_removals
@@ -76,10 +77,24 @@ zip -j wdl/merge_dedup_qc_imps_deps.zip wdl/dedup.wdl
 
 **Run pipeline:**
 ```
-CromwellInteract submit --wdl wdl/merge_dedub_qc_imps.json --inputs wd/merge_dedup_qc_imps_modified.json --deps wdl/merge_dedup_qc_imps_deps.zip
+CromwellInteract submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_dedup_qc_imps_remove_non_inclusion_r7.json --deps wdl/merge_dedup_qc_imps_deps.zip
 ```
 
 **copy output**
 
 Per batch duplicates removed
 Final merged files
+
+
+## Production runs
+**Release 7 runs **
+
+Data was ran in cromwell-fg-1
+- Legacy data batches hash 7c9804b0-1850-4c76-8643-c628332db399  
+- Affy data a371ed62-cf5c-43ee-b755-8790eb3efe0c
+- Deduplication across batches f188e4b7-f004-483b-b250-319b087766ac
+- Removal of final non-inclusions samples and deduplication combined 8934d7cc-97d1-47fe-8893-c8799943d2ff
+
+##
+List of final non included samples in above run
+comm -23 <(gsutil cat gs://thl-incoming-data/from-data-team/R7/fgfactory_pass_samples_R7.txt | awk 'BEGIN{ FS=":";} NR>1{ print $6}' | sort -b) <(gsutil cat gs://r7_data/R7_lists_from_Tero/finngen_R7_finngenid_inclusion_list.txt | sort -b)  > r7_samples_not_in_inclusion
