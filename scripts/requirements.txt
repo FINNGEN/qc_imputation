@@ -1,0 +1,3 @@
+## these are needed on local run of generate_dedup_merge_conf.py
+requests==2.25.1
+google-cloud-storage

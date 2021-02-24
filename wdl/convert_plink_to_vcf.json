@@ -1,0 +1,3 @@
+{
+    "convert_plink_to_fg_vcf.inputlist": "gs://r7_data/R7_pilot_runs/legacy/batches/legacy_plink"
+}

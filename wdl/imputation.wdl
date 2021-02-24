@@ -1,5 +1,7 @@
 import "qc_sub.wdl" as qc_sub
 import "imp_sub.wdl" as imp_sub
+import "post_subset_sub.wdl" as post_subset_sub
+
 
 workflow qc_imputation {
 
@@ -15,17 +17,31 @@ workflow qc_imputation {
     Array[Int] chrs
     String include_regex
     Int genome_build
-    Float variant_missing
-    Float sample_missing
+    File high_ld_regions
+    String docker
     Array[Float] f
-    Float het_sd
-    Int pi_hat_min_n
-    Int pi_hat_min_n_excess
+
+    File? exclude_denials
+    File? duplicate_samples
+    ## could compute a single PCA for all samples in panel and across batches and pass the PCs forward to per chr qc.
+    ## Now the PCA uses only single chromosome variants in chr_qc... probably not gonna make a huge difference but that should be the correct way.
+    ## it is not crucial/detrimental though as failing to account for structure in panel comparison will only remove variants that might be region specific
+    ## but won't introduce bad variants.
+
+    ## We don't want to use bad variants or high ld regions as covariates when comparing variant freq to panel, so added qc
+    ## at this level. Also PCA fails if very high missingness individuals in...
+
+    ### symmetric variants close to 0.5 can remain with other data than FinnGen
+    # (legacy data aligned with Will Raynards mapping files according to Timo and Affy data should be aligned correctly??)
+    #
+    ## ... Maybe better remove symmetric MAF > 0.4 etc. at some point? Mitja
 
     # run joint qc and panel comparison per chromosome
     scatter (chr in chrs) {
         call qc_sub.chr_qc as chr_qc {
-            input: name=name, chr=chr, panel_vcf=ref_panel[chr], include_regex=include_regex
+            input: exclude_samples_loc=exclude_samples_loc,
+                vcf_loc=vcf_loc,name=name, chr=chr, panel_vcf=ref_panel[chr], include_regex=include_regex,
+                Fs=f,genome_build=genome_build, high_ld_regions=high_ld_regions, docker=docker
         }
     }
     # run qc per batch across all chromosomes
@@ -34,43 +50,105 @@ workflow qc_imputation {
         # combine panel comparison across chrs and create plot
         call panel_comparison {
             input: base=base1, freq=transpose(chr_qc.freq)[i], freq_panel=transpose(chr_qc.freq_panel)[i],
-            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i]
+            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i],
+            docker=docker
         }
         # run qc
         call batch_qc {
             input: base=base1, beds=transpose(chr_qc.out_beds)[i], bims=transpose(chr_qc.out_bims)[i], fams=transpose(chr_qc.out_fams)[i],
             fam_sexcheck=fams_sexcheck[i], exclude_variants_joint=chr_qc.exclude_variants, exclude_variants_panel=panel_comparison.exclude_variants,
-            genome_build=genome_build, exclude_samples=exclude_samples[i], variant_missing=variant_missing, sample_missing=sample_missing,
-            f=f, het_sd=het_sd, pi_hat_min_n=pi_hat_min_n, pi_hat_min_n_excess=pi_hat_min_n_excess, include_regex=include_regex
+            genome_build=genome_build, exclude_samples=exclude_samples[i],
+            f=f, include_regex=include_regex,high_ld_regions=high_ld_regions, docker=docker
         }
     }
-    # get duplicates to remove across batches
+    # get duplicates (_dup or same ID) to remove across batches
     call duplicates {
-        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude, sample_missingness=batch_qc.sample_missingness
+        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude,
+        sample_missingness=batch_qc.sample_missingness, docker=docker
     }
+
     # create plots per batch
     scatter (i in range(length(vcfs))) {
         String base2 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
         call plots {
-            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]], exclude_samples=duplicates.allbatches_samples_exclude,
-            exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]], sample_missingness=[batch_qc.sample_missingness[i]], pihat_n=[batch_qc.pihat_n[i]],
-            pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=variant_missing, sample_missing=sample_missing, f=f, het_sd=het_sd, pi_hat_min_n=pi_hat_min_n
+            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]],
+            exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
+            exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]],
+            sample_missingness=[batch_qc.sample_missingness[i]], sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
+            pihat_n=[batch_qc.pihat_n[i]],
+            pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
+            sample_missing=batch_qc.sample_missing_threshold[i],
+            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
         }
     }
+
     # create plots across all batches
     call plots as joint_plots {
-        input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity, exclude_samples=duplicates.allbatches_samples_exclude,
-        exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness, sample_missingness=batch_qc.sample_missingness, pihat_n=batch_qc.pihat_n,
-        pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=variant_missing, sample_missing=sample_missing, f=f, het_sd=het_sd, pi_hat_min_n=pi_hat_min_n
+        input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
+        exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=batch_qc.all_batch_var_freq,
+        exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness,
+        sample_missingness=batch_qc.sample_missingness, sample_missingness_raw=batch_qc.sample_missingness_raw, pihat_n=batch_qc.pihat_n,
+        pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
+        sample_missing=batch_qc.sample_missing_threshold[0],
+        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
     }
-    # run imputation per chromosome
+
     if (run_imputation) {
+        # run imputation per chromosome
         scatter (i in range(length(chrs))) {
-            call imp_sub.imputation {
+            call imp_sub.imputation as imputation{
                 input: chr=chrs[i], beds=chr_qc.out_beds[i], joint_qc_exclude_variants=chr_qc.exclude_variants[i],
                 batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude
             }
+
+            ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
+            ### add logic to subwf
+            call post_subset_sub.subset_samples as subset_samples{
+                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
+                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+                docker=docker
+            }
         }
+
+
+        if ( length(vcfs)>1 ) {
+            scatter (i in range(length(chrs))) {
+                call paste {
+                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
+                     docker=docker
+                }
+            }
+        }
+    }
+}
+
+task paste {
+
+    Array[File] vcfs
+    String outfile
+    String dollar = "$"
+    String storage="local-disk 300 HDD"
+    Int cpus = 32
+    String docker
+
+
+    command <<<
+        set -euxo pipefail
+        echo "Execute vcf-fusion&paste&bgzip command"
+        time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
+        tabix -p vcf ${outfile}
+    >>>
+
+    output {
+        File out = outfile
+        File idx = outfile + ".tbi"
+    }
+    runtime {
+        docker: "gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
+        memory: "12 GB"
+        cpu: cpus
+        disks: "local-disk 300 HDD"
+        preemptible: 0
     }
 }
 
@@ -82,6 +160,7 @@ task panel_comparison {
     Array[File] files_glm
     Array[File] exclude_variants_panel
     Float p
+    String docker
 
     command <<<
 
@@ -192,7 +271,7 @@ task panel_comparison {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "7 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
@@ -225,47 +304,56 @@ task batch_qc {
     Int pi_hat_min_n_excess
     Int pi_hat_min_n
     String dollar = "$"
+    String docker
+
 
     command <<<
-
-        set -euxo pipefail
-
+        set -euo pipefail
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
         plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
         plink2_cmd="plink2 --allow-extra-chr --memory $mem"
 
-        # get variants to exclude based on joint qc and panel comparison
+        echo "get variants to exclude based on joint qc and panel comparison"
         for file in ${sep=" " exclude_variants_joint}; do cat $file >> upfront_exclude_variants.txt; done
         cat ${exclude_variants_panel} >> upfront_exclude_variants.txt
 
+        echo "copying the files"
         # move per-chr plink files to current directory
         for file in ${sep=" " beds}; do
             mv $file .; mv ${dollar}{file/\.bed/\.bim} .; mv ${dollar}{file/\.bed/\.fam} .
         done
 
+        echo "done copying the files"
+
+
         # get samples in data to exclude by given list not counting the same sample more than once
         # TODO using sex check fam here because samples may have been excluded earlier and we want to list all excluded samples here
-        awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} | grep -E "${include_regex}" | \
-        awk 'BEGIN{OFS="\t"} {print $1,$2,"NA"}' | sort -u >> ${base}.samples_exclude.txt
 
-        # merge chrs excluding variants that did not pass joint qc or panel comparison and samples in given list
+        ## grep returns code 1 so if no matches (e.g. no exclusions) and pipefail
+        ## stops the execution silently! below test handles that
+        awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} \
+         | { grep -E "${include_regex}" || test $?=1;} | awk 'BEGIN{OFS="\t"} {print $1,$2,"NA"}' |sort -u >> ${base}.samples_exclude.txt
+
+        echo "merge chrs excluding variants that did not pass joint qc or panel comparison and samples in given list"
         echo -e "`date`\tmerge"
         ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt) --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
+        $plink_cmd --merge-list mergelist.txt --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt)  \
+            --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
 
-        # get initial missingness for all remaining samples
-        $plink2_cmd --bfile ${base} --missing --out missing
-        cp missing.smiss ${base}.raw.smiss
-
-        # check that given sex check fam file matches data
+        echo "get initial missingness for all remaining samples"
+        $plink_cmd --bfile ${base} --missing --out missing
+        cp missing.imiss ${base}.raw.imiss
+        echo "check that given sex check fam file matches data"
         echo -e "`date`\tsex_check"
-        join -t $'\t' -1 3 -2 2 <(awk '{OFS="\t"; $1=$1; print $0}' ${base}.fam | nl -nln | sort -k3,3) <(sort -k2,2 ${fam_sexcheck}) | \
+        join -t $'\t' -1 3 -2 2 <(awk '{OFS="\t"; $1=$1; print $0}' ${base}.fam | nl -nln | sort -k3,3) <(awk '{OFS="\t"; $1=$1; print $0}' ${fam_sexcheck} | sort -k2,2 ) | \
         sort -b -k2,2g | awk '{OFS="\t"; print $8,$1,$9,$10,$11,$12}' > sexcheck.fam
+
         if [[ `diff <(awk '{print $2}' sexcheck.fam) <(awk '{print $2}' ${base}.fam) | wc -l | awk '{print $1}'` != 0 ]]; then
             >2& echo "samples differ between ${fam_sexcheck} and ${base}.fam"
             exit 1
         fi
-        # check sex excluding PAR region
+
+        echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
         $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out plink_data
         $plink_cmd --bfile plink_data --check-sex ${sep=" " f} --out plink_data
@@ -280,65 +368,112 @@ task batch_qc {
             sort -k2,2g | cut -f1,3- | awk 'NR>1&&$2!=$3 {OFS="\t"; print $1,"sex_check_ssn","NA"}' >> ${base}.samples_exclude.txt
         fi
 
-        # remove samples not passing sex check and given samples and filter by hw
+        echo "remove samples not passing sex check and given samples and filter by hw"
         echo -e "`date`\thwe"
         $plink2_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) \
               --hardy --hwe ${hw} --make-bed --out plink_data_after_hwe
-        awk 'NR>1&&$10<${hw} {OFS="\t"; print $2,"hwe",$10}' plink_data_after_hwe.hardy >> ${base}.variants_exclude.txt
+        awk ' NR==1{ for(i=1;i<=NF;i++)  { h[$i]=i; if((!"ID" in h) || (! "P" in h)) { print "ID and P fields expected in HARDY" >>"/dev/stderr"; exit 1} } }  \
+            NR>1&&$h["P"]<${hw} {OFS="\t"; print $h["ID"],"hwe",$h["P"]}' plink_data_after_hwe.hardy >> ${base}.variants_exclude.txt
         cp plink_data_after_hwe.hardy ${base}.hardy
 
-        # remove variants by missingness
+        awk '$4==2{ print $1,$2}' ${base}.sexcheck > genetic_females
+        $plink_cmd --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) --bfile ${base} \
+            --chr 23 --keep genetic_females --hardy --out females_only
+        awk 'NR==1{ for(i=1;i<=NF;i++)  { h[$i]=i; if((!"SNP" in h) || (! "P" in h)) { print "ID and P fields expected in HARDY" >>"/dev/stderr"; exit 1} } } \
+            NR>1&&$h["P"]<${hw} {OFS="\t"; print $h["SNP"],"hwe",$h["P"]}' females_only.hwe >> ${base}.variants_exclude.txt
+        #awk '{$5==2; print $0}' females_only.fam
+            ## set the to fam females as for genotyping quality purposes they can be used even if sample mixup
+
+        echo "remove variants by missingness"
         echo -e "`date`\tmissingness"
         $plink2_cmd --bfile plink_data_after_hwe --geno ${variant_missing} --make-bed --out plink_data
-        $plink2_cmd --bfile plink_data --missing --out missing
-        # get samples to exclude by missingness
-        awk 'BEGIN{OFS="\t"} NR>1 && $5>${sample_missing} {print $2,"missing_proportion",$5}' missing.smiss >> ${base}.samples_exclude.txt
-        cp missing.smiss ${base}.smiss
+        ## plink2 weirdly reports geno_missing/n_samples for some reason. plink 1.9 reports more sensible across variants sample missingess.
+        #$plink2_cmd --bfile plink_data --missing --out missing
+        $plink_cmd --bfile plink_data --missing --out missing
 
-        # remove samples by missingness and sex check
+        echo "get samples to exclude by missingness"
+        ## in here there can be variable number of columns. If phenotype is defined, the column will be 6th and need to use column name!
+        awk 'BEGIN{OFS="\t"} NR==1{ for(i=1;i<=NF;i++) { h[$i]=i}; if ( !("F_MISS" in h) || !("IID" in h) ) { print "F_MISS column not in .imiss file" >> "/dev/stderr"; exit 1; } } \
+            NR>1 && $h["F_MISS"]>${sample_missing} {print $h["IID"],"missing_proportion",$h["F_MISS"]}' missing.imiss >> ${base}.samples_exclude.txt
+
+        cp missing.imiss ${base}.imiss
+
+        echo "remove samples by missingness and sex check"
         # going back to when variants were not yet excluded by missingness
         echo -e "`date`\tfilter_samples"
         $plink2_cmd --bfile plink_data_after_hwe --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) --missing --make-bed --out plink_data
 
-        # remove variants by missingness once more after removing samples by missingness
+        echo "remove variants by missingness once more after removing samples by missingness"
         echo -e "`date`\tmissingness"
-        awk 'BEGIN{OFS="\t"} NR>1 && $5!="nan" && $5>${variant_missing} {print $2,"missing_proportion",$5}' plink_data.vmiss >> ${base}.variants_exclude.txt
+
+        awk 'BEGIN{OFS="\t"} NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("F_MISS" in h)) { print "F_MISS column not in .vmiss file" >> "/dev/stderr"; exit 1 } } \
+            NR>1 && $h["F_MISS"]!="nan" && $h["F_MISS"]>${variant_missing} {print $2,"missing_proportion",$h["F_MISS"]}' plink_data.vmiss >> ${base}.variants_exclude.txt
         cp plink_data.vmiss ${base}.vmiss
         # NOTE variant exclusion now done, filter with high AF threshold for the rest of QC
         $plink2_cmd --bfile plink_data --maf 0.05 --exclude <(cut -f1 ${base}.variants_exclude.txt) --make-bed --out plink_data
 
-        # get samples to exclude due to high heterozygosity (contamination)
+        echo "get samples to exclude due to high heterozygosity (contamination)"
         echo -e "`date`\theterozygosity"
         $plink_cmd --bfile plink_data --het --out plink_data
-        awk 'BEGIN{OFS="\t"} NR==1{$1=$1; print $0,"het_rate"} NR>1{$1=$1; print $0,($5-$3)/$3}' plink_data.het > ${base}.heterozygosity.txt
+
+        awk 'BEGIN{OFS="\t"} NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; \
+                if ( !(("N(NM)" in h) && ("O(HOM)" in h)) ) { print "Expected N(NM) and O(HOM) columns in .het file" >> "/dev/stderr"; exit 1 }; $1=$1; print $0,"het_rate" }  \
+            NR>1{ if($5!=0) {het_rate=($h["N(NM)"]-$h["O(HOM)"])/$h["N(NM)"] } else {het_rate=0};$1=$1; print $0,het_rate}' plink_data.het > ${base}.heterozygosity.txt
+
         mean=`tail -n+2 ${base}.heterozygosity.txt | cut -f7 | datamash mean 1`
         sdev=`tail -n+2 ${base}.heterozygosity.txt | cut -f7 | datamash sstdev 1`
-        awk -v mean=$mean -v sdev=$sdev 'BEGIN{OFS="\t"} NR>1&&$7!="NA"&&($7-mean>${het_sd}*sdev) {print $2,"heterozygosity",$7}' ${base}.heterozygosity.txt >> ${base}.samples_exclude.txt
+        awk -v mean=$mean -v sdev=$sdev 'BEGIN{OFS="\t"} \
+            NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if(! "het_rate" in h) {print "het_rate column not found in created heterozygosity file" >> "/dev/stderr"; exit 1} } \
+            NR>1&&$7!="NA"&&($7-mean>${het_sd}*sdev) {print $2,"heterozygosity",$7}' ${base}.heterozygosity.txt >> ${base}.samples_exclude.txt
 
-        # get samples to exclude due to extreme pi-hat if any are left after heterozygosity filtering
+        echo "get samples to exclude due to extreme pi-hat if any are left after heterozygosity filtering"
         echo -e "`date`\tpi_hat"
         $plink2_cmd --bfile plink_data --exclude range ${high_ld_regions} --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt | sort -u) --indep-pairwise ${pihat_ld} --out pruned
         $plink_cmd --bfile plink_data --extract pruned.prune.in --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt | sort -u) --genome gz --out genome
-        zcat genome.genome.gz | awk 'NR>1&&$10>${pi_hat} {n[$2]++;n[$4]++} END{for(id in n) print id,n[id]}' > ${base}.pihat_n_raw.txt
+        zcat genome.genome.gz | awk ' NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("PI_HAT" in h)) {print "PI_HAT column not found in IBD file" >> "/dev/stderr"; exit 1}} \
+            NR>1&&$h["PI_HAT"]>${pi_hat} {n[$2]++;n[$4]++} END{for(id in n) print id,n[id]}' > ${base}.pihat_n_raw.txt
         awk 'BEGIN{OFS="\t"} $2>=${pi_hat_min_n_excess} {print $1,"pi_hat_excess",$2}' ${base}.pihat_n_raw.txt >> ${base}.samples_exclude.txt
         mv genome.genome.gz ${base}.genome_raw.gz
         # exclude samples with an extreme number of relatives based on pi-hat (contamination) and run again
         $plink_cmd --bfile plink_data --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt | sort -u) --extract pruned.prune.in --genome gz --out genome
-        zcat genome.genome.gz | awk 'NR>1&&$10>${pi_hat} {n[$2]++;n[$4]++} END{for(id in n) print id,n[id]}' > ${base}.pihat_n.txt
+        zcat genome.genome.gz | awk 'NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("PI_HAT" in h)) {print "PI_HAT column not found in IBD file" >> "/dev/stderr"; exit 1}} \
+            NR>1&&$h["PI_HAT"]>${pi_hat} {n[$2]++;n[$4]++} END{for(id in n) print id,n[id]}' > ${base}.pihat_n.txt
         awk 'BEGIN{OFS="\t"} $2>=${pi_hat_min_n} {print $1,"pi_hat",$2}' ${base}.pihat_n.txt >> ${base}.samples_exclude.txt
         mv genome.genome.gz ${base}.genome.gz
 
-        # get included samples
+        echo "get included samples"
         comm -23 <(cut -f2 ${base}.fam | sort) <(cut -f1 ${base}.samples_exclude.txt | sort) > ${base}.samples_include.txt
         echo -e "`date`\tdone"
 
-        # add variants from panel comparison to exclusion
+        echo "add variants from panel comparison to exclusion"
         cat ${exclude_variants_panel} >> ${base}.variants_exclude.txt
 
+        echo "add variants from joint qc comparison to exclusion"
+
+        for file in ${sep=" " bims}; do
+            bn=$(basename $file)
+            cut -f2 $bn >> all_batch_variants
+        done
+
+        ## adding variants only once per batch for each reason (not looking for 3rd column, value of the failure as those can be from different batches.)
+        for file in ${sep=" " exclude_variants_joint}; do cat $file >> joint_variant_exclusions; done
+        awk 'BEGIN{OFS="\t"} NR==FNR{ exists[$1]=1 }  \
+            NR>FNR&&($1 in exists)&&(!dups[$1$2]++){ print $1,"joint_qc_"$2,$3} ' \
+        all_batch_variants joint_variant_exclusions >> ${base}.variants_exclude.txt
+
+        ## create frq per batch to getoriginal variants in a batch and their AF
+        echo "ID AF" > ${base}.frq
+        for chr in ${sep=" " beds};
+        do
+            bn=$(basename $chr)
+            $plink2_cmd --bfile ${dollar}{bn%.bed} --freq --out ${dollar}{bn%.bed}
+            awk 'NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if ((!"ID" in h) || (! "ALT_FREQS" in h )) {print "ID and ALT_FREQS columns expected in .afreq file." >>"/dev/stderr"; exit 1;} } \
+                NR>1{ print $h["ID"],$h["ALT_FREQS"]}' ${dollar}{bn%.bed}".afreq" >> ${base}.frq
+        done
     >>>
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "10 GB"
         cpu: 4
         disks: "local-disk 200 HDD"
@@ -351,14 +486,23 @@ task batch_qc {
         File samples_include = base + ".samples_include.txt"
         File heterozygosity = base + ".heterozygosity.txt"
         File variant_missingness = base + ".vmiss"
-        File sample_missingness = base + ".smiss"
-        File sample_missingness_raw = base + ".raw.smiss"
+        File sample_missingness = base + ".imiss"
+        File sample_missingness_raw = base + ".raw.imiss"
         File sexcheck = base + ".sexcheck"
         File genome_raw = base + ".genome_raw.gz"
         File genome = base + ".genome.gz"
         File pihat_n_raw = base + ".pihat_n_raw.txt"
         File pihat_n = base + ".pihat_n.txt"
         File hardy = base + ".hardy"
+        File all_batch_var_freq = base + ".frq"
+        # moved these here so these thresholds are defined in this task where they are used
+        # instead of in the global level where it can be unclear where they are used.
+        # For plotting etc. use whatever is reported from this task.
+        Float variant_missing_threshold = variant_missing
+        Float sample_missing_threshold = sample_missing
+        Float het_sd_threshold = het_sd
+        Int pi_hat_min_n_threshold = pi_hat_min_n
+        Int pi_hat_min_n_excess_threshold =pi_hat_min_n_excess
     }
 }
 
@@ -368,6 +512,7 @@ task duplicates {
     Array[File] samples_exclude
     Array[File] sample_missingness
     String dollar = "$"
+    String docker
 
     command <<<
 
@@ -379,17 +524,26 @@ task duplicates {
 
         # concat inclusion and missingness files including batch id
         awk 'BEGIN{OFS="\t"} {sub(".samples_include.txt", "", FILENAME); print FILENAME,$0}' *.samples_include.txt > inc
-        awk 'BEGIN{OFS="\t"} FNR==NR&&NR==1{print "batch",$0} FNR>1{sub(".smiss", "", FILENAME); print FILENAME,$0}' *.smiss > smiss
+
+        # Different plink created missingness files can have different number of columns (e.g. if phenotype was supplied).
+        # gotta use each files headers.
+        awk 'BEGIN{OFS="\t"} NR==1{print "batch","IID","F_MISS"} \
+            FNR==1{ for(i=1;i<=NF;i++) { h[$i]=i}; if (!( ("IID" in h) && ("F_MISS" in h) )) { print "IID or F_MISS columns not in",FILENAME," file" >> "/dev/stderr"; exit 1; } }
+            FNR>1{sub(".imiss", "", FILENAME); print FILENAME,$h["IID"],$h["F_MISS"]}' *.imiss > smiss
 
         # get missingness for included samples
-        awk 'BEGIN{OFS="\t"} NR==FNR{a[$0]=1} NR>FNR && (FNR==1 || $1"\t"$3 in a)' inc smiss > inc_smiss
+        awk 'BEGIN{OFS="\t"} NR==FNR{a[$0]=1} \
+            NR>FNR&&FNR==1{ for(i=1;i<=NF;i++) { h[$i]=i}; if (!( ("IID" in h) && ("batch" in h) && ("F_MISS" in h) )) { print "IID or batch columns not in combined missingess file" >> "/dev/stderr"; exit 1; } } \
+            NR>FNR && (FNR==1 || $h["batch"]"\t"$h["IID"] in a) { print $h["batch"],$h["IID"],$h["F_MISS"]}' inc smiss > inc_smiss
         if [[ `tail -n+2 inc_smiss | wc -l | awk '{print $1}'` != `wc -l inc | awk '{print $1}'` ]]; then
             >2& echo "samples do not match between sample inclusion files and smiss files"
             exit 1
         fi
 
         # get duplicates (2 or more _dup or same id) to remove keeping the sample with most variants called
-        awk 'NR>1 { split($3, d, "_dup"); if ($5-$4>n[d[1]]) { n[d[1]]=$5-$4; i[d[1]]=$1"\t"$3 }} END {for (s in i) print i[s]}' inc_smiss > dupremoved
+        awk ' NR==1{ for(i=1;i<=NF;i++) { h[$i]=i}; if (!( ("IID" in h) && ("F_MISS" in h) && ("batch" in h) )) { print "IID,F_MISS or batch columns not in .imiss file" >> "/dev/stderr"; exit 1; } } \
+              NR>1 { split($h["IID"], d, "_dup"); if ( !(d[1] in n) || ($h["F_MISS"]<n[d[1]]) ) { n[d[1]]=$h["F_MISS"]; iid[d[1]]=$h["batch"]"\t"$h["IID"] }} \
+              END {for (s in iid) print iid[s]}' inc_smiss > dupremoved
         comm -23 <(sort inc) <(sort dupremoved) > excdup
 
         # remove duplicates from each batch and create joint files
@@ -410,7 +564,7 @@ task duplicates {
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "1 GB"
         cpu: 1
         disks: "local-disk 100 HDD"
@@ -426,9 +580,11 @@ task plots {
     Array[File] sexcheck
     Array[File] variant_missingness
     Array[File] sample_missingness
+    Array[File] sample_missingness_raw # before removing anything else besides denials.
     Array[File] heterozygosity
     Array[File] pihat_n
     Array[File] pihat_n_raw
+    Array[File] all_batch_var_freq
     File exclude_samples
     Array[File] exclude_variants
     Array[Float] f
@@ -436,9 +592,11 @@ task plots {
     Float sample_missing
     Float het_sd
     Int pi_hat_min_n
+    String docker
+
+    String dollar="$"
 
     command <<<
-
         set -euxo pipefail
 
         # concat variants if not creating joint plots
@@ -459,6 +617,128 @@ task plots {
         fi
         for file in ${sep=" " exclude_variants}; do mv $file .; done
         awk '{OFS="\t"; sub(".variants_exclude.txt", "", FILENAME); print FILENAME,$0}' *variants_exclude.txt | grep -Ev "not_in_panel|af_panel" > excluded_variants
+
+        ## GET VARIANTS THAT ARE in joint_qc_ but not anywhere else to report what gets removed in joint but not elsewhere
+        ###!!!SUMMARIZE DATA.... might be good move to separate script for clarity at some point
+         awk ' {  if(match($3,"^joint_qc")) { jointout[$2]=$0;} else { batchout[$2]=$2} } \
+            END{ for(v in jointout) { if (!(v in batchout) && !printed[v]++) { print $0}  } }' excluded_variants > variants_excluded_in_joint_only
+
+            for file in ${sep=" " all_batch_var_freq}; do mv $file .; done
+            for file in ${sep=" " sample_missingness}; do mv $file .; done
+
+            for file in ${sep=" " sample_missingness_raw}; do mv $file .; done
+
+            for batch_excl in *variants_exclude.txt;
+            do
+                batch=${dollar}{batch_excl%.variants_exclude.txt}
+                echo $batch >> batches
+            done
+
+            Rscript - <<EOF
+            require(data.table)
+            require(tidyverse)
+            require(ggplot2)
+            require(ggpubr)
+
+
+            batches <- fread("batches", header = F)[["V1"]]
+
+            excl_samples <- fread("excluded_samples", header=F) %>%
+              rename(batch=V1,id=V2,reason=V3,value=V4)
+
+            pdf("${name}_excluded_variants.pdf", width=14, height=12)
+
+            summaries <- list()
+            sample_summaries <- list()
+            for (b in batches) {
+              all_vars <- fread(paste0(b,".frq"))
+              excluded <- fread(paste0(b,".variants_exclude.txt"), header=F) %>%
+                rename(ID=V1, reason=V2, value=V3)
+
+              sample_missingness_raw <- fread(paste0(b,".raw.imiss"))
+
+              n_vars_total <- nrow(all_vars)
+
+              all_and_excl <- all_vars %>% left_join(excluded, by=c("ID"="ID"))
+
+              all_and_excl\$MAF<- ifelse( all_and_excl\$AF>0.5, 1-all_and_excl\$AF, all_and_excl\$AF )
+
+              n_vars_excluded <- length(unique(subset(all_and_excl, !is.na(reason))[["ID"]]))
+              samples_excluded <- excl_samples[ excl_samples\$batch==b,]
+
+              n_samples <- nrow(sample_missingness_raw)
+
+              var_causes <- excluded %>% dplyr::count(reason)
+              sample_causes <- samples_excluded %>% dplyr::count(reason)
+
+              var_causes_comb <- paste(var_causes\$reason,var_causes\$n,sep="=", collapse=";")
+
+              sample_causes_comb <- paste(sample_causes\$reason,sample_causes\$n,sep="=",collapse=";")
+
+              n_samples_excluded <- nrow(samples_excluded)
+
+              sample_missingness_raw\$n_excluded_vars <- n_vars_excluded
+              sample_missingness_raw\$n_vars_total <- n_vars_total
+
+              sample_missingness_raw\$batch <- b
+
+              sd <- sample_missingness_raw[,c("IID","batch","N_MISS","N_GENO","n_vars_total","n_excluded_vars")]
+              colnames(sd)[3] <- "N_MISS_in_batch_qc"
+              colnames(sd)[4] <- "N_GENO_in_batch_qc"
+
+              ## remove samples not in final data.
+              sd <- sd %>% dplyr::anti_join(excl_samples, by=c("IID"="id", "batch"="batch"))
+
+              sample_summaries[[length(sample_summaries)+1]] <-sd
+
+              d <-  data.frame(batch=b, original_vars=n_vars_total,
+                               excluded_vars = n_vars_excluded,n_samples=n_samples,
+                               n_sample_excl=n_samples_excluded, var_excl_reasons=var_causes_comb,
+                               sample_excl_reasons=sample_causes_comb)
+              summaries[[length(summaries)+1]] <-d
+
+
+              p1<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_histogram(aes(x=MAF, colour=reason), binwidth = 0.01, closed="left") +
+                xlab("MAF (binwidth 0.01)")
+
+              p2<-ggplot( subset(all_and_excl, !is.na(reason))) + geom_histogram(aes(x=MAF, colour=reason), binwidth = 0.01, closed="left") +
+                  coord_cartesian(ylim=c(0,10000))  + xlab("MAF (binwidth 0.01)")
+
+
+              p3<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.001)+
+                  xlab("MAF (binwidth 0.001)")
+
+
+              p4<-ggplot( subset(all_and_excl, !is.na(reason) & MAF < 0.05)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.001)+
+                coord_cartesian(ylim=c(0,10000)) + xlab("MAF (binwidth 0.001)")
+
+
+              p5<-ggplot( subset(all_and_excl, !is.na(reason) & MAF <= 0.01)) + geom_histogram(aes(x=MAF, colour=reason), binwidth=0.0005)+
+                coord_cartesian(ylim=c(0,10000)) + xlab("MAF (binwidth 0.0005)")
+
+
+              counts <- ggplot(var_causes) + geom_bar(aes(y=n, x=reason, colour=reason, fill=reason),stat="identity") +
+                  theme(axis.text.x = element_text(angle = 90)) + geom_text(aes(y=0, x=reason, label=n), angle=90, hjust = 0)
+              pcomb <- ggarrange(p1, p2, p3, p4,p5, counts , common.legend=T, legend="right")
+              p<-annotate_figure(pcomb, fig.lab=paste0(b,". Original variants:", n_vars_total ,", removed vars:",n_vars_excluded), fig.lab.pos="top.right",fig.lab.size=14)
+              plot(p)
+            }
+            sums <- do.call(rbind, summaries)
+            sample_sums <- do.call(rbind, sample_summaries)
+            write.table(sums,"${name}_batch_summaries.txt",sep="\t", row.names=F, quote=F)
+            write.table(sample_sums,"${name}_sample_summaries.txt",sep="\t", row.names=F, quote=F)
+        EOF
+            ## pass panel AF here and plot removed variants by AF.
+            ## summarize number of snps originally and how many are left in each batch and per batch counts of failures.
+        #####
+
+
+        ## create summary table of per batch variants and samples removed.
+        ## need also fams/orig sample ids per batch.
+        ##
+        #for org in original_bims do
+        #    batch=$(basename $v| sed 's/\.bim//g')
+        #done
 
         # create plots
         Rscript - <<EOF
@@ -564,14 +844,20 @@ task plots {
           dev.off()
         }
         EOF
+
     >>>
 
     output {
         Array[File] png = glob("*.png")
+        File joint_qc_exclude_vars="variants_excluded_in_joint_only"
+        File summaries=name + "_batch_summaries.txt"
+        File sample_summaries=name + "_sample_summaries.txt"
+        File exclude_vars_dists=name + "_excluded_variants.pdf"
     }
 
+
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.6"
+        docker: "${docker}"
         memory: "3 GB"
         cpu: 1
         disks: "local-disk 100 HDD"

@@ -7,6 +7,8 @@ workflow imputation {
     String exclude_samples
     Int n_batches = length(batch_qc_exclude_variants)
 
+    File? exclude_denials
+
     scatter (i in range(n_batches)) {
         call plink_to_vcf {
             input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants, batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples
@@ -17,6 +19,11 @@ workflow imputation {
         call post_imputation {
             input: chr=chr, vcf=phase_impute.out_imputed
         }
+    }
+
+    output {
+        Array[File] vcfs = post_imputation.tags_edited
+        Array[File] vcf_idxs = post_imputation.tags_edited_tbi
     }
 }
 
@@ -39,7 +46,11 @@ task plink_to_vcf {
 
         # convert to vcf
         cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) | sort -u > exclude_variants.txt
-        awk '$1==${base} && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
+
+        ## this removal was not working... base was wrong due to addition of _chr..
+        ## Removing postfix
+        awk -v base=${base} ' BEGIN{ batch=base; sub("_chr..?$","",batch)} $1==batch && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
+
         $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --remove exclude_samples.txt --exclude exclude_variants.txt --make-bed --out temp
         # remove _dup suffix from fam
         sed -i 's/_dup[0-9]\+//' temp.fam
@@ -143,21 +154,21 @@ task post_imputation {
 
         # create info/af plots
         echo -e 'CHR\tSNP\tREF\tALT\tAF\tINFO\tAF_GROUP' > ${base}_varID_AF_INFO_GROUP.txt
-        bcftools query -f '%CHROM\t%CHROM\_%POS\_%REF\_%ALT\t%REF\t%ALT\t%INFO/AF\t%INFO/INFO\t-\n' ${base}_imputed_infotags.vcf.gz | \
+        time bcftools query -f '%CHROM\t%CHROM\_%POS\_%REF\_%ALT\t%REF\t%ALT\t%INFO/AF\t%INFO/INFO\t-\n' ${base}_imputed_infotags.vcf.gz | \
         awk '{if ($5>=0.05 && $5<=0.95) $7=1; else if(($5>=0.005 && $5<0.05) || ($5<=0.995 && $5>0.95)) $7=2; else $7=3} { print $1"\t"$2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7 }' \
         >> ${base}_varID_AF_INFO_GROUP.txt
-        Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
+        time Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
 
         # annotate, edit tags and index
         [[ ${base} =~ (.*)_chr[0-9]+ ]]
         batch=${dollar}{BASH_REMATCH[1]}
         edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch AR2: DR2: IMP:"
-        bcftools index -t -f ${base}_imputed_infotags.vcf.gz
-		bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
+        time bcftools index -t -f ${base}_imputed_infotags.vcf.gz
+		time bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
 		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Ov | \
         java -jar /tools/tagEditing_v1.1.jar $edits | \
         bgzip > ${base}_tags_edited.vcf.gz
-        bcftools index -t -f ${base}_tags_edited.vcf.gz
+        time bcftools index -t -f ${base}_tags_edited.vcf.gz
 
     >>>
 

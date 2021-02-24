@@ -1,0 +1,7 @@
+{
+    "merge_dedup_qc_imps.docker":"gcr.io/finngen-refinery-dev/qc_imputation:0.01",
+    "merge_dedup_qc_imps.basename": "{basename}",
+    "merge_dedup_qc_imps.chrs": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+    "merge_dedup_qc_imps.remove_samples": "{remove_samples_file}",
+    "merge_dedup_qc_imps.per_chr_batch_files": "{to_merge_per_batch}"
+}
