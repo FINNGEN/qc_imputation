@@ -2,7 +2,59 @@
 Genotype QC and imputation pipeline
 
 ## Configuration
-    *TODO*
+
+Note that all input text files should be UTF-8 encoded
+
+QC/imputation pipeline imputation.wdl inputs
+
+```
+    "qc_imputation.docker" docker image to use
+    "qc_imputation.name": name of the run, e.g. r7_legacy
+    "qc_imputation.run_imputation": true/false, whether to run also imputation or only qc
+    "qc_imputation.chr_qc.joint_qc.run_joint_qc": true/false, whether to run joint qc across all batches or not
+    "qc_imputation.chr_qc.compare_panel.compare": true/false, whether to run comparison against panel
+    "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
+    "qc_imputation.vcf_loc": location of genotype data VCF files to run
+    "qc_imputation.fam_loc": location of genotype data FAM files to run
+    "qc_imputation.exclude_samples_loc": location of samples to exclude from the run
+    "qc_imputation.duplicate_samples": location of tab-delimited list of duplicate ids (same individual genotyped many times)
+    "qc_imputation.include_regex": regex of samples to include in the run, e.g. "^FG" to only include FinnGen ids
+    "qc_imputation.chrs": list of chromosomes to run
+    "qc_imputation.genome_build": genome build version (38)
+    "qc_imputation.panel_comparison.p": p-value threshold to use in excluding variants based on GWAS against panel, e.g. 5e-8
+    "qc_imputation.high_ld_regions": location of list of high-LD regions of the genome
+    "qc_imputation.chr_qc.vcf_to_bed_chr.ref_fasta": location of reference genome FASTA file
+    "qc_imputation.chr_qc.compare_panel.panel_freq": location of allele frequencies in the imputation panel
+    "qc_imputation.chr_qc.compare_panel.pca_ld": PLINK LD parameters to use in PCA in comparison against imputation panel
+    "qc_imputation.chr_qc.compare_panel.pca_maf": minimum allele frequency to use in PCA in comparison against imputation panel
+    "qc_imputation.chr_qc.compare_panel.af_panel": minimum allele frequency in imputation panel - variants below this frequency will be excluded from imputation
+    "qc_imputation.chr_qc.compare_panel.af_diff": maximum absolute frequency between data and imputation panel - variants above this difference will be excluded from imputation
+    "qc_imputation.chr_qc.compare_panel.af_fc": log of maximum allele frequency fold change against imputation panel - variants above this fold change will be excluded from imputation
+    "qc_imputation.chr_qc.joint_qc.af": minimum allele frequency in the genotype data - variants below this frequency will be excluded from imputation - this can be 0 as we're using the imputation panel to determine minimum frequency to use
+    "qc_imputation.chr_qc.joint_qc.hw": HWE p-value threshold - variants below this threshold across all batches will be excluded
+    "qc_imputation.chr_qc.joint_qc.variant_missing_overall": maximum variant missingness across all batches - variants above this missingness will be excluded - this can be 1 because different batches may contain different variants which can lead to high overall missingness
+    "qc_imputation.chr_qc.joint_qc.variant_missing_single_batch": maximum variant missingness in a single batch - variants above this missingness in any batch will be excluded from all batches
+    "qc_imputation.f": PLINK F thresholds for determining genotype sex - individuals between this range will be excluded
+    "qc_imputation.batch_qc.ssn_sex": location of list of social security number based sexes
+    "qc_imputation.batch_qc.pi_hat": pi-hat threshold to use in detecting sample contamination
+    "qc_imputation.batch_qc.variant_missing": maximum variant missingess in batch QC - variants above this missingess will be excluded from imputation of the batch
+    "qc_imputation.batch_qc.sample_missing": maximum sample missingess in batch QC - samples above this missingess will be excluded from imputation
+    "qc_imputation.batch_qc.pihat_ld": PLINK LD parameters for pruning for pi-hat calculation
+    "qc_imputation.batch_qc.hw": HWE p-value threshold for the batch - variants below this will be excluded from imputation of the batch
+    "qc_imputation.batch_qc.het_sd": heterozygosity standard deviation threshold X - samples with heterozygosity lower than mean - X*sdev or higher than mean + X*sdev will be excluded
+    "qc_imputation.batch_qc.pi_hat_min_n_excess": maximum excessive number of relatives based on pi-hat - in the first round of pi-hat calculation samples with more than this number of relatives will be excluded
+    "qc_imputation.batch_qc.pi_hat_min_n": maximum number of relatives based on pi-hat - in the second round of pi-hat calculation samples with more than this number of relatives will be excluded
+    "qc_imputation.ref_panel": chromosome-to-imputation_panel_vcf_location_with_SNPID dictionary 
+    "qc_imputation.imputation.phase_impute.ref_panel": chromosome-to-imputation_panel_vcf_location dictionary
+    "qc_imputation.imputation.phase_impute.genetic_maps_eagle": chromosome-to-genetic_map_for_eagle dictionary
+    "qc_imputation.imputation.phase_impute.genetic_maps_beagle": chromosome-to-genetic_map_for_beagle dictionary
+    "qc_imputation.imputation.post_imputation.ref_panel_freq": location of allele frequencies in the imputation panel
+    "qc_imputation.imputation.post_imputation.annot_hdr": location of header file to use in post-imputation annotation
+    "qc_imputation.imputation.post_imputation.annot_tab": location of gzipped .tab file to use in post-imputation annotation
+    "qc_imputation.imputation.post_imputation.annot_tab_index": location of tabix index of the above
+    "qc_imputation.imputation.post_imputation.annot_col_incl": list of inclusion columns in post-imputation annotation
+```
+
 ## Running
     *TODO*
 
