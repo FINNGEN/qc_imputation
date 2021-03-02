@@ -35,7 +35,7 @@ qc/imputation pipeline creates sample qc summary stats and pick sample with the 
 *NOTE: you need to have socks ssh tunnel running in port 5000 connected to cromwell machine in all below commands*.
 Create tunnel if necessary:
 ```
-CromwellInteract connect cromwell-machine-name
+CromwellInteract.py connect cromwell-machine-name
 ```
 
 
@@ -77,7 +77,7 @@ zip -j wdl/merge_dedup_qc_imps_deps.zip wdl/dedup.wdl
 
 **Run pipeline:**
 ```
-CromwellInteract submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_dedup_qc_imps_remove_non_inclusion_r7.json --deps wdl/merge_dedup_qc_imps_deps.zip
+CromwellInteract.py submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_dedup_qc_imps_remove_non_inclusion_r7.json --deps wdl/merge_dedup_qc_imps_deps.zip
 ```
 
 **copy output**
