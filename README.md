@@ -68,9 +68,17 @@ zip sub.zip qc_sub.wdl imp_sub.wdl post_subset_sub.wdl
 cd ..
 ```
 
-run pipeline for legacy batches
+*NOTE: you need to have socks ssh tunnel running in port 5000 connected to cromwell machine*
+
+Create tunnel if necessary:
 ```
-CromwellInteract.py submit --wdl imputation.wdl --inputs wdl/imputation.r7.legacy.json --deps wdl/sub.zip
+CromwellInteract.py connect cromwell-machine-name
+```
+
+Then run pipeline, e.g. for legacy batches
+
+```
+CromwellInteract.py submit --wdl wdl/imputation.wdl --inputs wdl/imputation.r7.legacy.json --deps wdl/sub.zip
 ```
 
 ## Copying output to targe buckets
@@ -125,7 +133,6 @@ Example from R7 production runs:
 Files:
 - {outprefix}_final_sample_removals . Add any sample IDs to be removed here in case additional removals are needed (e.g. samples in that are not in exclusions list).
 - {outprefix}_all_batches_per_chr
-
 
 
 In our example:
