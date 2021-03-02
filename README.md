@@ -56,7 +56,22 @@ QC/imputation pipeline imputation.wdl inputs
 ```
 
 ## Running
-    *TODO*
+
+The QC/imputation pipeline can be run directly using Cromwell. Either the Cromwell Swagger UI or the [CromwellInteract](https://github.com/FINNGEN/CromwellInteract) command-line tool can be used
+
+Example:
+
+zip dependencies
+```
+cd wdl
+zip sub.zip qc_sub.wdl imp_sub.wdl post_subset_sub.wdl
+cd ..
+```
+
+run pipeline for legacy batches
+```
+CromwellInteract.py submit --wdl imputation.wdl --inputs wdl/imputation.r7.legacy.json --deps wdl/sub.zip
+```
 
 ## Copying output to targe buckets
 
@@ -82,7 +97,7 @@ CromwellInteract.py outfiles a371ed62-cf5c-43ee-b755-8790eb3efe0c qc_imputation.
 
 After successful run of different qc/imputation pipelines( e.g. separately for legacy and affy), we need to do duplicate removal across all batches in all runs.
 
-qc/imputation pipeline creates sample qc summary stats and pick sample with the most variants after qc as the genotype ID to keep.
+qc/imputation pipeline creates sample qc summary stats and we pick the sample with the most variants after qc as the genotype ID to keep.
 
 *NOTE: you need to have socks ssh tunnel running in port 5000 connected to cromwell machine in all below commands*.
 Create tunnel if necessary:
@@ -90,14 +105,13 @@ Create tunnel if necessary:
 CromwellInteract.py connect cromwell-machine-name
 ```
 
-
 Create configuration file using:
 ```
 scripts/generate_dedup_merge_conf.py hash1,hash2 duplicateids_file outprefix
 ```
 
 Parameters:
-1. comma separated list of cromwell job hashes
+1. comma separated list of cromwell job hashes (e.g. affy run, legacy run)
 2. file with duplicate ids for a single individual. Each row should have tab separated list of alternate genotyping IDs.
 3. outputprefix of created files
 
@@ -137,16 +151,16 @@ CromwellInteract.py submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_
 Per batch duplicates removed
 Final merged files
 
-
 ## Production runs
 **Release 7 runs **
 
 Data was ran in cromwell-fg-1
 - Legacy data batches hash 7c9804b0-1850-4c76-8643-c628332db399  
 - Affy data a371ed62-cf5c-43ee-b755-8790eb3efe0c
-- Deduplication across batches f188e4b7-f004-483b-b250-319b087766ac
-- Removal of final non-inclusions samples and deduplication combined 8934d7cc-97d1-47fe-8893-c8799943d2ff
+- Removal of final non-inclusions samples and deduplication across batches combined 8934d7cc-97d1-47fe-8893-c8799943d2ff
 
-##
-List of final non included samples in above run
+List of final non included samples
+
+```
 comm -23 <(gsutil cat gs://thl-incoming-data/from-data-team/R7/fgfactory_pass_samples_R7.txt | awk 'BEGIN{ FS=":";} NR>1{ print $6}' | sort -b) <(gsutil cat gs://r7_data/R7_lists_from_Tero/finngen_R7_finngenid_inclusion_list.txt | sort -b)  > r7_samples_not_in_inclusion
+```
