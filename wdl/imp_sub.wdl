@@ -13,7 +13,9 @@ workflow imputation {
 
     scatter (i in range(n_batches)) {
         call plink_to_vcf {
-            input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants, batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples, force_impute_variants=force_impute_variants
+            input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants,
+	    batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples,
+	    force_impute_variants=force_impute_variants
         }
         call phase_impute {
             input: chr=chr, vcf=plink_to_vcf.vcf, ref_panel=ref_panel
