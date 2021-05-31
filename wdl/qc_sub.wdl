@@ -108,6 +108,7 @@ task vcf_to_bed_chr {
         cpu: 4
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -208,10 +209,12 @@ task compare_panel {
 
     runtime {
         docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
-        memory: "14 GB"
+        #TODO memory depending on panel vcf size
+        memory: "28 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -339,5 +342,6 @@ task joint_qc {
         cpu: 6
         disks: "local-disk 500 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }

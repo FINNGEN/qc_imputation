@@ -98,7 +98,7 @@ workflow qc_imputation {
         scatter (i in range(length(chrs))) {
             call imp_sub.imputation as imputation{
                 input: chr=chrs[i], beds=chr_qc.out_beds[i], joint_qc_exclude_variants=chr_qc.exclude_variants[i],
-                batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude
+                batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude, ref_panel=ref_panel
             }
 
             ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
@@ -149,6 +149,7 @@ task paste {
         cpu: cpus
         disks: "local-disk 300 HDD"
         preemptible: 0
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -276,6 +277,7 @@ task panel_comparison {
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -478,6 +480,7 @@ task batch_qc {
         cpu: 4
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 
     output {
@@ -569,6 +572,7 @@ task duplicates {
         cpu: 1
         disks: "local-disk 100 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -862,5 +866,6 @@ task plots {
         cpu: 1
         disks: "local-disk 100 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
