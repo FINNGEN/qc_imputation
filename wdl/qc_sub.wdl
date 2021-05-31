@@ -208,7 +208,8 @@ task compare_panel {
 
     runtime {
         docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
-        memory: "14 GB"
+        #TODO memory depending on panel vcf size
+        memory: "28 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
