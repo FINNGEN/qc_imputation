@@ -108,6 +108,7 @@ task vcf_to_bed_chr {
         cpu: 4
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -213,6 +214,7 @@ task compare_panel {
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -340,5 +342,6 @@ task joint_qc {
         cpu: 6
         disks: "local-disk 500 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }

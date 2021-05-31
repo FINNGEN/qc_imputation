@@ -4,17 +4,19 @@ workflow imputation {
     Array[String] beds
     String joint_qc_exclude_variants
     Array[String] batch_qc_exclude_variants
+    String force_impute_variants
     String exclude_samples
+    Map[Int, String] ref_panel
     Int n_batches = length(batch_qc_exclude_variants)
 
     File? exclude_denials
 
     scatter (i in range(n_batches)) {
         call plink_to_vcf {
-            input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants, batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples
+            input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants, batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples, force_impute_variants=force_impute_variants
         }
         call phase_impute {
-            input: chr=chr, vcf=plink_to_vcf.vcf
+            input: chr=chr, vcf=plink_to_vcf.vcf, ref_panel=ref_panel
         }
         call post_imputation {
             input: chr=chr, vcf=phase_impute.out_imputed
@@ -36,6 +38,7 @@ task plink_to_vcf {
     File joint_qc_exclude_variants
     File batch_qc_exclude_variants
     File exclude_samples
+    File force_impute_variants
 
     command <<<
 
@@ -44,10 +47,9 @@ task plink_to_vcf {
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
         plink2_cmd="plink2 --allow-extra-chr --memory $mem"
 
-        # convert to vcf
-        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) | sort -u > exclude_variants.txt
+        # get list of variants to exclude
+        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) ${force_impute_variants} | sort -u > exclude_variants.txt
 
-        ## this removal was not working... base was wrong due to addition of _chr..
         ## Removing postfix
         awk -v base=${base} ' BEGIN{ batch=base; sub("_chr..?$","",batch)} $1==batch && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
 
@@ -74,6 +76,7 @@ task plink_to_vcf {
         cpu: 4
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -128,6 +131,7 @@ task phase_impute {
         cpu: 32
         disks: "local-disk 100 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -178,6 +182,7 @@ task post_imputation {
         cpu: 2
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 
     output {
