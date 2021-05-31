@@ -11,6 +11,7 @@ QC/imputation pipeline imputation.wdl inputs
     "qc_imputation.docker" docker image to use
     "qc_imputation.name": name of the run, e.g. r7_legacy
     "qc_imputation.run_imputation": true/false, whether to run also imputation or only qc
+    "qc_imputation.imputation.force_impute_variants": location of a list of variants to force imputation of even if they otherwise pass QC (can be an empty file),
     "qc_imputation.chr_qc.joint_qc.run_joint_qc": true/false, whether to run joint qc across all batches or not
     "qc_imputation.chr_qc.compare_panel.compare": true/false, whether to run comparison against panel
     "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
