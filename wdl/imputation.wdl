@@ -1,6 +1,7 @@
 import "qc_sub.wdl" as qc_sub
 import "imp_sub.wdl" as imp_sub
 import "post_subset_sub.wdl" as post_subset_sub
+import "merge_chunks.wdl" as  merge_sub
 
 
 workflow qc_imputation {
@@ -113,45 +114,15 @@ workflow qc_imputation {
 
         if ( length(vcfs)>1 ) {
             scatter (i in range(length(chrs))) {
-                call paste {
+                call merge_sub.merge_in_chunks {
                      input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
-                     docker=docker
+                     docker=docker,chunksize=20000
                 }
             }
         }
     }
 }
 
-task paste {
-
-    Array[File] vcfs
-    String outfile
-    String dollar = "$"
-    String storage="local-disk 300 HDD"
-    Int cpus = 32
-    String docker
-
-
-    command <<<
-        set -euxo pipefail
-        echo "Execute vcf-fusion&paste&bgzip command"
-        time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
-        tabix -p vcf ${outfile}
-    >>>
-
-    output {
-        File out = outfile
-        File idx = outfile + ".tbi"
-    }
-    runtime {
-        docker: "gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
-        memory: "12 GB"
-        cpu: cpus
-        disks: "local-disk 300 HDD"
-        preemptible: 0
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
 
 task panel_comparison {
 
