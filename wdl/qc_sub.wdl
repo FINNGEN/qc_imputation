@@ -81,7 +81,7 @@ task vcf_to_bed_chr {
             $1 !~ "^#" \
                 {  \
                     sub("chr", "", $1); $1="chr"$1; $3=$1"_"$2"_"$4"_"$5; \
-                    if( $7 == "PASS" && $5~"^[ATCG]+$") {print $0 } else { if($7!="PASS") { print $3,"batch_non_pass",$7 > "exclude_variants" }; if(5!~"^[ATCG]+$") { print $3,"non_std_alt",$7 > "exclude_variants"  } } \
+                    if( $7 == "PASS" && $5~"^[ATCG]+$") {print $0 } else { if($7!="PASS") { print $3,"batch_non_pass",$7 > "exclude_variants" }; if($5!~"^[ATCG]+$") { print $3,"non_std_alt",$5 > "exclude_variants"  } } \
                 } '  | bgzip -@2 > vcf.gz
         tabix -p vcf vcf.gz
 
