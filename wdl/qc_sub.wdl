@@ -17,14 +17,17 @@ workflow chr_qc {
         call vcf_to_bed_chr {
             input: chr=chr, vcf=vcfs[i], exclude_samples=exclude_samples[i], include_regex=include_regex,docker=docker
         }
-        call compare_panel {
-            input: chr=chr, bed=vcf_to_bed_chr.out_bed, panel_vcf=panel_vcf,high_ld_regions=high_ld_regions
-        }
+        #call compare_panel {
+        #    input: chr=chr, bed=vcf_to_bed_chr.out_bed, panel_vcf=panel_vcf,high_ld_regions=high_ld_regions
+        #}
+    }
+
+    call compare_panel {
+        input: base=name, chr=chr, beds=vcf_to_bed_chr.out_bed, bims=vcf_to_bed_chr.out_bim, fams=vcf_to_bed_chr.out_fam,
+        panel_vcf=panel_vcf, high_ld_regions=high_ld_regions
     }
 
     call joint_qc {
-        ## Add blacklist variants if not PASS.
-        ### remove completely if missingness per batch is high.
         input: chr=chr, outname=name+"_chr"+chr, beds=vcf_to_bed_chr.out_bed,
         bims=vcf_to_bed_chr.out_bim, fams=vcf_to_bed_chr.out_fam, Fs=Fs,  genome_build=genome_build,
         exclude_upstream_variants=vcf_to_bed_chr.exclude_variants, docker=docker
@@ -36,10 +39,14 @@ workflow chr_qc {
         Array[File] out_fams = vcf_to_bed_chr.out_fam
         File exclude_variants = joint_qc.exclude_variants
         File snpstats = joint_qc.snpstats
-        Array[File] glm = compare_panel.glm
-        Array[File] freq = compare_panel.freq
-        Array[File] freq_panel = compare_panel.freq_panel
-        Array[File] exclude_variants_panel = compare_panel.exclude_variants
+        #Array[File] glm = compare_panel.glm
+        #Array[File] freq = compare_panel.freq
+        #Array[File] freq_panel = compare_panel.freq_panel
+        #Array[File] exclude_variants_panel = compare_panel.exclude_variants
+        File glm = compare_panel.glm
+        File freq = compare_panel.freq
+        File freq_panel = compare_panel.freq_panel
+        File exclude_variants_panel = compare_panel.exclude_variants
     }
 }
 
@@ -117,10 +124,14 @@ task compare_panel {
     Boolean compare
     Int chr
     String chrstr = if chr == 23 then "X" else chr
-    File bed
-    File bim = sub(bed, ".bed$", ".bim")
-    File fam = sub(bed, ".bed$", ".fam")
-    String base = basename(bed, ".bed")
+    #File bed
+    #File bim = sub(bed, ".bed$", ".bim")
+    #File fam = sub(bed, ".bed$", ".fam")
+    #String base = basename(bed, ".bed")
+    Array[File] beds
+    Array[File] bims
+    Array[File] fams
+    String base
     File panel_vcf
     String base_panel = basename(panel_vcf, ".vcf.gz")
     File panel_freq
@@ -134,13 +145,15 @@ task compare_panel {
     Float variant_missing_for_pca = 0.02
     Float hwe_for_pca = 0.000001
 
+    String dollar="$"
+
     command <<<
 
         set -euxo pipefail
 
         touch ${base}.exclude_variants.txt
         touch ${base}.PHENO1.glm.logistic.hybrid
-        touch ${base}_chip.frq
+        touch ${base}.frq
         touch ${base_panel}.frq
         touch ${base}_chip_AFs.png
         touch ${base}.eigenvec
@@ -148,13 +161,22 @@ task compare_panel {
             exit 0
         fi
 
-        mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
         plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem --chr ${chr}"
         plink2_cmd="plink2 --allow-extra-chr --memory $mem --chr ${chr}"
 
+        # move per-batch plink files to current directory
+        for file in ${sep=" " beds}; do
+            mv $file .; mv ${dollar}{file/\.bed/\.bim} .; mv ${dollar}{file/\.bed/\.fam} .
+        done
+
+        echo -e "`date`\tmerge"
+        ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
+        $plink_cmd --merge-list mergelist.txt --make-bed --out ${base}
+
         # compare to panel and create af plots
         echo -e "`date`\tcompare to panel r"
-        $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --freq --out ${base}
+        $plink2_cmd --bfile ${base} --freq --out ${base}
         awk 'BEGIN{OFS="\t"} NR==1{print "CHR","SNP","REF","ALT","AF"} NR>1{print "chr"$1,$2,$3,$4,$5}' ${base}.afreq > ${base}_chip.frq
         awk 'NR==1 || $1 ~ "^(chr)?${chrstr}$"' ${panel_freq} > ${base_panel}.frq
         Rscript /tools/r_scripts/plot_AF_FC_v1.3.3.R ${base} chip ${base_panel}.frq ${af_diff} ${af_fc}
@@ -166,11 +188,19 @@ task compare_panel {
 
         # create plink files for dataset and panel with common variants between them
         echo -e "`date`\tcompare to panel glm"
-        $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --exclude <(cut -f1 ${base}.exclude_variants.txt | sort -u) --make-bed --out panel_isec
+        if [[ ${chr} == 23 ]]; then
+            $plink_cmd --bfile ${base} --exclude <(cut -f1 ${base}.exclude_variants.txt | sort -u) --make-bed --impute-sex --const-fid --out panel_isec
+        else
+            $plink_cmd --bfile ${base} --exclude <(cut -f1 ${base}.exclude_variants.txt | sort -u) --make-bed --const-fid --out panel_isec
+        fi
         # rename dataset ids in case there are panel samples
         awk '{OFS="\t"; $2="DATA-"$2; print $0}' panel_isec.fam > temp && mv temp panel_isec.fam
         awk 'FNR==NR{a[$2]=1} FNR<NR && ($0 ~ "^#" || $3 in a)' panel_isec.bim <(zcat ${panel_vcf}) | bgzip > panel.vcf.gz
-        $plink2_cmd --vcf panel.vcf.gz --make-bed --out panel
+        if [[ ${chr} == 23 ]]; then
+            $plink_cmd --vcf panel.vcf.gz --make-bed --impute-sex --const-fid --out panel
+        else
+            $plink_cmd --vcf panel.vcf.gz --make-bed --const-fid --out panel
+        fi
         awk 'BEGIN{OFS="\t"} {print "0", $2, "1"}' panel.fam > pheno
         awk 'BEGIN{OFS="\t"} {print "0", $2, "2"}' panel_isec.fam >> pheno
 
@@ -179,9 +209,8 @@ task compare_panel {
         if [[ ${chr} == 23 ]]; then
             $plink2_cmd --bfile merged --const-fid --glm firth-fallback allow-no-covars --pheno pheno --out ${base}
         else
-
-        ## PCA can fail if there are very high missing individuals. Remove those that are gonna be removed anyway.
-        ## Also we don't want to correct for bad variants or high ld regions when testing against panel but genetic diff....
+            ## PCA can fail if there are very high missing individuals. Remove those that are gonna be removed anyway.
+            ## Also we don't want to correct for bad variants or high ld regions when testing against panel but genetic diff....
             $plink2_cmd --bfile merged --maf ${pca_maf} --hwe ${hwe_for_pca} --geno ${variant_missing_for_pca} --exclude range ${high_ld_regions} \
                 --indep-pairwise ${pca_ld} --out pruned
 
@@ -205,12 +234,12 @@ task compare_panel {
         File freq_panel = base_panel + ".frq"
         File eigenvec = base + ".eigenvec"
         File png = base + "_chip_AFs.png"
+        File merged_fam = "merged.fam"
     }
 
     runtime {
         docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
-        #TODO memory depending on panel vcf size
-        memory: "28 GB"
+        memory: ceil(size(panel_vcf, "G") / 2) + " GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
@@ -283,6 +312,10 @@ task joint_qc {
         echo -e "`date`\tcalculate snpstats"
         qctool -g ${outname}.bed -snp-stats -osnp ${outname}.snpstats.txt
         grep -Ev "^#" ${outname}.snpstats.txt | awk '
+        BEGIN {OFS="\t"}
+        NR==1{for (i=1;i<=NF;i++) h[$i]=i; $1=$1; print $0,"all_sample_hwe"}
+        NR>1 {$1=$1; print $0,$h["HW_exact_p_value"]}' > tmp && mv tmp ${outname}.snpstats.txt
+        awk '
         BEGIN {OFS="\t"} NR==1 {for (i=1;i<=NF;i++) h[$i]=i}
         NR>1 {
             id=$h["rsid"]; af1=$h["alleleA_frequency"]; af2=$h["alleleB_frequency"]; hw=$h["HW_exact_p_value"]; miss=$h["missing_proportion"];
@@ -290,14 +323,15 @@ task joint_qc {
             if (af2<${af}) print id,"alleleB_frequency",af2;
             if ($h["chromosome"] !~ "(chr)?X|23" && hw<${hw}) print id,"HW_exact_p_value",hw;
             if (miss>${variant_missing_overall}) print id,"missing_proportion",miss;
-        }' >> ${outname}.exclude_variants.txt
+        }' ${outname}.snpstats.txt >> ${outname}.exclude_variants.txt
 
         if [[ "${chr}" -eq 23 ]];
         then
             plink --allow-extra-chr --keep-allele-order --bfile ${outname} --split-x b${genome_build} no-fail --make-bed --out plink_data
             plink --allow-extra-chr --keep-allele-order  --bfile plink_data --check-sex ${sep=" " Fs} --out plink_data
             awk '$4==2{ print $1,$2}' plink_data.sexcheck > genetic_females
-            plink --bfile plink_data --chr 23 --keep genetic_females --make-bed --out females_only
+            #get non-PAR X variants in genetic females to calculate snpstats from
+            plink --allow-extra-chr --keep-allele-order --bfile plink_data --chr 23 --keep genetic_females --make-bed --out females_only
             #awk '{$5==2; print $0}' females_only.fam
             ## set the to fam females as for genotyping quality purposes they can be used even if sample mixup
             qctool -g females_only.bed -snp-stats -osnp females_only_chrx.snpstats.txt
@@ -314,18 +348,18 @@ task joint_qc {
                 id=$h["rsid"];hw=$h["HW_exact_p_value"]
                 hwes[id]=hw;
             }
-            FNR<NR && FNR == 1{ for (i=1;i<=NF;i++) h[$i]=i; $1=$1; print $0,"all_sample_hwe" }
+            FNR<NR && FNR == 1{ for (i=1;i<=NF;i++) h[$i]=i; $1=$1; print $0 }
             FNR<NR && FNR > 1 {
-                id=$h["rsid"];hw=$h["HW_exact_p_value"]
+                id=$h["rsid"]
                 hw=$h["HW_exact_p_value"]
-                $h["HW_exact_p_value"]=hwes[id]
-                print $0,hw
+                if (id in hwes) $h["HW_exact_p_value"]=hwes[id] # update HWE based on females for non-PAR variants
+                print $0
             }
             ' <(grep -Ev "^#" females_only_chrx.snpstats.txt) <(grep -Ev "^#" ${outname}.snpstats.txt) > tmp
             mv tmp ${outname}".snpstats.txt"
         fi
 
-        ## add all variants that failed in original conversion from vcf to plink ( practically non-PASS in any batch)
+        ## add all variants that didn't pass in original conversion from vcf to plink ( practically non-PASS or CNV in any batch)
         awk 'BEGIN{ OFS="\t"} !seen[$0]++' ${sep=" " exclude_upstream_variants} >> ${outname}.exclude_variants.txt
         echo -e "`date`\tdone"
 
