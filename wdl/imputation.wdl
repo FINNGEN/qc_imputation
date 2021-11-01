@@ -1,6 +1,6 @@
-import "qc_sub.wdl" as qc_sub
-import "imp_sub.wdl" as imp_sub
-import "post_subset_sub.wdl" as post_subset_sub
+#import "qc_sub.wdl" as qc_sub
+#import "imp_sub.wdl" as imp_sub
+#import "post_subset_sub.wdl" as post_subset_sub
 
 
 workflow qc_imputation {
@@ -37,76 +37,89 @@ workflow qc_imputation {
     #
     ## ... Maybe better remove symmetric MAF > 0.4 etc. at some point? Mitja
 
+    # convert batches from vcf to bed
+    # and run glm between each batch and panel
+    scatter (i in range(length(vcfs))) {
+        call vcf_to_bed {
+            input: vcf=vcfs[i], exclude_samples=exclude_samples[i], include_regex=include_regex, docker=docker
+        }
+        call glm_vs_panel {
+            input: base=sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", ""),
+            beds=[vcf_to_bed.out_bed], bims=[vcf_to_bed.out_bim], fams=[vcf_to_bed.out_fam],
+            high_ld_regions=high_ld_regions, docker=docker
+        }
+    }
+
     # run joint qc and panel comparison per chromosome
-    scatter (chr in chrs) {
-        call qc_sub.chr_qc as chr_qc {
-            input: exclude_samples_loc=exclude_samples_loc,
-                vcf_loc=vcf_loc,name=name, chr=chr, panel_vcf=ref_panel[chr], include_regex=include_regex,
-                Fs=f,genome_build=genome_build, high_ld_regions=high_ld_regions, docker=docker
-        }
-    }
-
-    # gather per-chr snpstats to one file
-    call gather_snpstats {
-        input: name=name, snpstats=chr_qc.snpstats, docker=docker
-    }
-
-    # combine panel comparison across chrs and create plot
-    call panel_comparison {
-        input: base=name, freq=chr_qc.freq, freq_panel=chr_qc.freq_panel,
-        files_glm=chr_qc.glm, exclude_variants_panel=chr_qc.exclude_variants_panel,
-        docker=docker
-    }
-
-    # run qc per batch across all chromosomes
-    scatter (i in range(length(vcfs))) {
-        String base1 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
-        # combine panel comparison across chrs and create plot
-#        call panel_comparison {
-#            input: base=base1, freq=transpose(chr_qc.freq)[i], freq_panel=transpose(chr_qc.freq_panel)[i],
-#            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i],
-#            docker=docker
+#    scatter (chr in chrs) {
+#        call qc_sub.chr_qc as chr_qc {
+#            input: beds=vcf_to_bed.out_bed, bims=vcf_to_bed.out_bim, fams=vcf_to_bed.out_fam,
+#            name=name, chr=chr, panel_vcf=ref_panel[chr], include_regex=include_regex,
+#            Fs=f,genome_build=genome_build, high_ld_regions=high_ld_regions, docker=docker
 #        }
-        # run qc
-        call batch_qc {
-            input: base=base1, beds=transpose(chr_qc.out_beds)[i], bims=transpose(chr_qc.out_bims)[i], fams=transpose(chr_qc.out_fams)[i],
-            fam_sexcheck=fams_sexcheck[i], exclude_variants_joint=chr_qc.exclude_variants, exclude_variants_panel=panel_comparison.exclude_variants,
-            genome_build=genome_build, exclude_samples=exclude_samples[i], chip_qc=chip_qc,
-            f=f, include_regex=include_regex,high_ld_regions=high_ld_regions, docker=docker
-        }
-    }
-
-    # get duplicates (_dup or same ID) to remove across batches
-    call duplicates {
-        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude,
-        sample_missingness=batch_qc.sample_missingness, docker=docker
-    }
-
-    # create plots per batch
-    scatter (i in range(length(vcfs))) {
-        String base2 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
-        call plots {
-            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]],
-            exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
-            exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]],
-            sample_missingness=[batch_qc.sample_missingness[i]], sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
-            pihat_n=[batch_qc.pihat_n[i]],
-            pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
-            sample_missing=batch_qc.sample_missing_threshold[i],
-            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
-        }
-    }
-
-    # create plots across all batches
-    call plots as joint_plots {
-        input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
-        exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=batch_qc.all_batch_var_freq,
-        exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness,
-        sample_missingness=batch_qc.sample_missingness, sample_missingness_raw=batch_qc.sample_missingness_raw, pihat_n=batch_qc.pihat_n,
-        pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
-        sample_missing=batch_qc.sample_missing_threshold[0],
-        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
-    }
+#    }
+#
+#    # gather per-chr snpstats to one file
+#    call gather_snpstats {
+#        input: name=name, snpstats=chr_qc.snpstats, docker=docker
+#    }
+#
+#    # combine panel comparison across chrs and create plot
+#    call panel_comparison {
+#        input: base=name, freq=chr_qc.freq, freq_panel=chr_qc.freq_panel,
+#        files_glm=chr_qc.glm, exclude_variants_panel=chr_qc.exclude_variants_panel,
+#        docker=docker
+#    }
+#
+#    # run qc per batch across all chromosomes
+#    scatter (i in range(length(vcfs))) {
+#        String base1 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
+#        # combine panel comparison across chrs and create plot
+##        call panel_comparison {
+##            input: base=base1, freq=transpose(chr_qc.freq)[i], freq_panel=transpose(chr_qc.freq_panel)[i],
+##            files_glm=transpose(chr_qc.glm)[i], exclude_variants_panel=transpose(chr_qc.exclude_variants_panel)[i],
+##            docker=docker
+##        }
+#        # run qc
+#        call batch_qc {
+#            input: base=base1, beds=transpose(chr_qc.out_beds)[i], bims=transpose(chr_qc.out_bims)[i], fams=transpose(chr_qc.out_fams)[i],
+#            fam_sexcheck=fams_sexcheck[i], exclude_variants_joint=chr_qc.exclude_variants, exclude_variants_panel=panel_comparison.exclude_variants,
+#            genome_build=genome_build, exclude_samples=exclude_samples[i], chip_qc=chip_qc,
+#            f=f, include_regex=include_regex,high_ld_regions=high_ld_regions, docker=docker
+#        }
+#    }
+#
+#    # get duplicates (_dup or same ID) to remove across batches
+#    call duplicates {
+#        input: samples_include=batch_qc.samples_include, samples_exclude=batch_qc.samples_exclude,
+#        sample_missingness=batch_qc.sample_missingness, docker=docker
+#    }
+#
+#    # create plots per batch
+#    scatter (i in range(length(vcfs))) {
+#        String base2 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
+#        call plots {
+#            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]],
+#            exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
+#            exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]],
+#            sample_missingness=[batch_qc.sample_missingness[i]], sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
+#            pihat_n=[batch_qc.pihat_n[i]],
+#            pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
+#            sample_missing=batch_qc.sample_missing_threshold[i],
+#            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
+#        }
+#    }
+#
+#    # create plots across all batches
+#    call plots as joint_plots {
+#        input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
+#        exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=batch_qc.all_batch_var_freq,
+#        exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness,
+#        sample_missingness=batch_qc.sample_missingness, sample_missingness_raw=batch_qc.sample_missingness_raw, pihat_n=batch_qc.pihat_n,
+#        pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
+#        sample_missing=batch_qc.sample_missing_threshold[0],
+#        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
+#    }
 
 ## To Timo and Ghazal: One VCF per batch - merging, duplicates (fixing bug), postmerging qc
 #    if (chip_qc) {
@@ -120,33 +133,196 @@ workflow qc_imputation {
 #            beds=batch_filter.out_bed
 #        }
 #    }
+#
+#    if (run_imputation) {
+#        # run imputation per chromosome
+#        scatter (i in range(length(chrs))) {
+#            call imp_sub.imputation as imputation{
+#                input: chr=chrs[i], beds=chr_qc.out_beds[i], joint_qc_exclude_variants=chr_qc.exclude_variants[i],
+#                batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude, ref_panel=ref_panel
+#            }
+#
+#            ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
+#            ### add logic to subwf
+#            call post_subset_sub.subset_samples as subset_samples{
+#                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
+#                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+#                docker=docker
+#            }
+#        }
+#
+#
+#        if ( length(vcfs)>1 ) {
+#            scatter (i in range(length(chrs))) {
+#                call paste {
+#                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
+#                     docker=docker
+#                }
+#            }
+#        }
+#    }
+}
 
-    if (run_imputation) {
-        # run imputation per chromosome
-        scatter (i in range(length(chrs))) {
-            call imp_sub.imputation as imputation{
-                input: chr=chrs[i], beds=chr_qc.out_beds[i], joint_qc_exclude_variants=chr_qc.exclude_variants[i],
-                batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude, ref_panel=ref_panel
-            }
+task vcf_to_bed {
 
-            ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
-            ### add logic to subwf
-            call post_subset_sub.subset_samples as subset_samples{
-                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
-                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
-                docker=docker
-            }
-        }
+    File vcf
+    String base = sub(sub(basename(vcf, ".vcf"), "_original", ""), ".calls", "")
+    File exclude_samples
+    String include_regex
+    File ref_fasta
 
+    String docker
 
-        if ( length(vcfs)>1 ) {
-            scatter (i in range(length(chrs))) {
-                call paste {
-                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
-                     docker=docker
-                }
-            }
-        }
+    command <<<
+
+        set -euxo pipefail
+
+        catcmd="cat"
+        if [[ ${vcf} == *.gz ]] || [[ ${vcf} == *.bgz ]]; then catcmd="zcat"; fi
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
+
+        # filter by given samples and prefix, align to reference, unpack multiallelics, remove Y/MT/extra contigs, rename variant id to chr1_1234_A_T
+        echo -e "`date`\talign"
+        comm -23 <($catcmd ${vcf} | grep -E "^#CHROM" | head -1 | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) <(cut -f1 ${exclude_samples} | sort) > include_samples.txt
+        bcftools view -m 2 -M 2 -S include_samples.txt ${vcf} -Ov | \
+        awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;} \
+                    $1 !~ "^#" \
+                    {  \
+                        ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid. \
+                        sub("chr", "", $1); $1="chr"$1;
+                        ## rid Y/MT/extra contigs
+                        if ($1~"chr[0-9]+|chrX") {
+                            print $0;
+                        }
+                    } \
+            ' | \
+        bcftools norm -f ${ref_fasta} -c ws -Ov | \
+        awk  'BEGIN{OFS="\t"} $1 ~ "^#"{print $0} \
+            $1 !~ "^#" \
+                {  \
+                    sub("chr", "", $1); $1="chr"$1; $3=$1"_"$2"_"$4"_"$5; \
+                    if( $7 == "PASS" && $5~"^[ATCG]+$") {print $0 } else { if($7!="PASS") { print $3,"batch_non_pass",$7 > "exclude_variants" }; if($5!~"^[ATCG]+$") { print $3,"non_std_alt",$5 > "exclude_variants"  } } \
+                } '  | bgzip -@2 > ${base}.vcf.gz
+        tabix -p vcf ${base}.vcf.gz
+
+        # create empty exclusion list if no exlusions
+        touch exclude_variants
+
+        # convert to plink
+        echo -e "`date`\tconvert to plink"
+        plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --max-alleles 2 --freq --make-bed --out ${base}
+        echo -e "`date`\tdone"
+
+    >>>
+
+    output {
+        File out_vcf = base + ".vcf.gz"
+        File out_vcf_tbi = base + ".vcf.gz.tbi"
+        File out_bed = base + ".bed"
+        File out_bim = base + ".bim"
+        File out_fam = base + ".fam"
+        File out_afreq = base + ".afreq"
+        File exclude_variants = "exclude_variants"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "3 GB"
+        cpu: 2
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
+task glm_vs_panel {
+
+    Array[File] beds
+    Array[File] bims
+    Array[File] fams
+    String base
+    File panel_bed
+    File panel_bim = sub(panel_bed, ".bed$", ".bim")
+    File panel_fam = sub(panel_bed, ".bed$", ".fam")
+    File panel_freq = sub(panel_bed, ".bed$", ".afreq")
+
+    File high_ld_regions
+    String pca_ld
+    Float pca_maf
+    Float variant_missing_for_pca = 0.02
+    Float sample_missing_for_pca = 0.1
+    Float hwe_for_pca = 0.000001
+
+    String docker
+    String dollar="$"
+
+    command <<<
+
+        set -euxo pipefail
+
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
+        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
+        plink2_cmd="plink2 --allow-extra-chr --memory $mem"
+
+        # move per-batch plink file(s) to current directory
+        for file in ${sep=" " beds}; do
+            mv $file .; mv ${dollar}{file/\.bed/\.bim} .; mv ${dollar}{file/\.bed/\.fam} .
+        done
+
+        # merge per-batch datasets - if there's only one dataset, this works anyway
+        echo -e "`date`\tmerge batches"
+        ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
+        $plink_cmd --merge-list mergelist.txt --make-bed --out ${base}
+
+        # create plink file for the merged dataset with variants shared with panel
+        echo -e "`date`\tmerge with panel"
+        $plink2_cmd --bfile ${base} --extract-intersect ${panel_bim} --make-bed --out gt_panel_isec
+        # rename dataset ids in case there are panel samples in the dataset
+        awk '{OFS="\t"; $2="DATA-"$2; print $0}' gt_panel_isec.fam > temp && mv temp gt_panel_isec.fam
+        # create plink file for panel with variants shared with dataset
+        $plink2_cmd --bfile ${sub(panel_bed, ".bed$", "")} --extract-intersect ${base}.bim --make-bed --out panel_gt_isec
+        # merge dataset and panel and impute sex
+        $plink_cmd --bfile gt_panel_isec --bmerge panel_gt_isec --make-bed --out merged
+        $plink_cmd --bfile merged --impute-sex --make-bed --out merged
+
+        echo -e "`date`\trun pca"
+        ## PCA can fail if there are very high missing individuals. Remove those that are gonna be removed anyway.
+        ## Also we don't want to correct for bad variants or high ld regions when testing against panel but genetic diff....
+        $plink2_cmd --bfile merged --maf ${pca_maf} --hwe ${hwe_for_pca} --geno ${variant_missing_for_pca} --exclude range ${high_ld_regions} \
+            --indep-pairwise ${pca_ld} --out pruned
+        $plink2_cmd --bfile merged --mind ${sample_missing_for_pca} --pca --extract pruned.prune.in --out ${base}
+
+        echo -e "`date`\trun glm"
+        # logistic glm between dataset and panel
+        awk 'BEGIN{OFS="\t"} {print "0", $2, "1"}' panel_gt_isec.fam > pheno
+        awk 'BEGIN{OFS="\t"} {print "0", $2, "2"}' gt_panel_isec.fam >> pheno
+        $plink2_cmd --bfile merged --mind ${sample_missing_for_pca} --const-fid --glm firth-fallback --covar ${base}.eigenvec --pheno pheno --out ${base}
+
+        echo -e "`date`\tcompute frequencies"
+        # extract stats from the glm result and calculate af in dataset and panel
+        grep -E "TEST|ADD" ${base}.PHENO1.glm.logistic.hybrid > temp && mv temp ${base}.PHENO1.glm.logistic.hybrid
+        $plink2_cmd --bfile gt_panel_isec --freq --out ${base}
+        $plink2_cmd --bfile panel_gt_isec --freq --out ${base}_panel_freq
+        awk 'BEGIN{OFS="\t"} NR==1{print "CHR","SNP","REF","ALT","AF"} NR>1{print "chr"$1,$2,$3,$4,$5}' ${base}.afreq > ${base}.frq
+        awk 'BEGIN{OFS="\t"} NR==1{print "CHR","SNP","REF","ALT","AF"} NR>1{print "chr"$1,$2,$3,$4,$5}' ${base}_panel_freq.afreq > ${base}_panel_freq.frq
+        echo -e "`date`\tdone"
+
+    >>>
+
+    output {
+        File glm  = base + ".PHENO1.glm.logistic.hybrid"
+        File dataset_freq_panel_intersect = base + ".frq"
+        File panel_freq_dataset_intersect = base + "_panel_freq.frq"
+        File eigenvec = base + ".eigenvec"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: ceil(size(panel_bed, "G") / 5) + " GB"
+        cpu: 4
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
