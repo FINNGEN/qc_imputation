@@ -557,7 +557,7 @@ task gather_snpstats_joint_qc {
         done
 
         # add variants based on snpstats with given thresholds
-        awk -M '
+        awk '
         BEGIN {OFS="\t"} NR==1 {for (i=1;i<=NF;i++) h[$i]=i}
         NR>1 {
             id=$h["rsid"];
@@ -575,7 +575,7 @@ task gather_snpstats_joint_qc {
             if (af1<${af}) print id,"joint_qc_alleleA_frequency",af1;
             if (af2<${af}) print id,"joint_qc_alleleB_frequency",af2;
             # allow rare variants with deficiency in homozygotes to escape hw
-            if (hw<${hw} && (maf > ${escape_hwe_maf} || hom>exp_hom)) print id,"joint_qc_HW_exact_p_value",hw;
+            if ((hw+0)<${hw} && (maf > ${escape_hwe_maf} || hom>exp_hom)) print id,"joint_qc_HW_exact_p_value",hw;
             if (miss>${variant_missing_overall}) print id,"joint_qc_missing_proportion",miss;
         }' ${name}.snpstats.txt >> ${name}.exclude_variants_joint_qc.txt
 
@@ -740,7 +740,7 @@ task panel_comparison {
         sink()
         EOF
 
-        awk -M 'BEGIN{OFS="\t"}NR==1{for(i=1;i<=NF;i++) a[$i]=i} NR>1 && $a["P"] < ${p} {print $1,"glm_panel",$a["P"]}' ${base}_panel_AF_glmfirthfallback.txt > ${base}.exclude_variants_panel_comparison.txt
+        awk 'BEGIN{OFS="\t"}NR==1{for(i=1;i<=NF;i++) a[$i]=i} NR>1 && ($a["P"]+0) < ${p} {print $1,"glm_panel",$a["P"]}' ${base}_panel_AF_glmfirthfallback.txt > ${base}.exclude_variants_panel_comparison.txt
 
     >>>
 
