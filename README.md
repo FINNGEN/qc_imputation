@@ -1,6 +1,66 @@
 # qc_imputation
 Genotype QC and imputation pipeline
 
+Takes a list of VCF files and input parameters and performs variant and sample wise QC and imputation
+
+## QC steps: chip QC (with rare variants in mind, no imputation)
+
+1. vcf_to_bed: Convert each VCF file to Plink bed
+* done per genotyping batch
+* .vcf or .vcf.gz accepted
+* excludes samples in a given text file (one sample per row)
+* possibility to filter samples based on prefix (in FinnGen we use prefix ^FG here to rid non-FinnGen samples up front)
+* aligns to given human reference genome
+* removes non-PASS variants and non-ATCG variants (CNVs)
+
+2. glm_vs_panel: Run PLINK glm firth-fallback against imputation panel to detect frequency deviations
+* done per genotyping batch
+* merges each bed with the panel on common variants and runs glm dataset vs. panel
+* covariates for glm: sex, PCs
+
+3. missingness: Compute variant missingness and list variants with high missingness
+* done per genotyping batch
+* lists variants with missingness above the given threshold for exclusion
+
+4. snpstats: Compute qctool snpstats (HWE p, missingness etc.)
+* done per chromosome across all genotyping batches
+* HWE p-value for X chromosome is based on genetic females only
+
+5. gather_snpstats_joint_qc: Combines snpstats across chromosomes and lists variants to be excluded based on stats
+* done across all genotyping batches
+* creates a list of variants to exclude from all batches
+* excludes non-ATCG variants (already excluded from the data for each batch in `vcf_to_bed` but listed also here for completeness)
+* excludes variants that were non-PASS (output of `vcf_to_bed`) in at least the given number of batches
+* excludes variants with high missingness (output of `missingness`) in at least the given number of batches
+* excludes variants with overall MAF below the given threshold (usually not used in practice i.e. the threshold is 0)
+* excludes variants with overall HWE exact p-value less than the given threshold (for X chromosome HWE is computed with genetic females only) - exception: variants below a given frequency that have a deficiency in homozygotes escape this exclusion, e.g. rs201754030 in TSFM is severe in recessive state and would be excluded based on HWE without this exception
+* excludes variants with overall missingness above the given threshold (usually not used in practice i.e. the threshold is 1)
+
+6. panel_comparison: Creates batch-panel comparison plots and lists variants to exclude based on glm
+* done per genotyping batch
+* takes glm stats computed in `glm_vs_panel`
+* lists variants with glm p-value less than the given threshold for exclusion
+
+7. batch_qc: Performs batch-wise QC
+* done per genotyping batch
+* variants listed for exclusion by `gather_snpstats_joint_qc` and `panel_comparison` are excluded up front before batch-wise QC
+* excludes variants with HWE exact p-value less than the given threshold
+* excludes variants with missingness above the given threshold
+* excludes samples that fail PLINK sex check with the given f thresholds
+* excludes samples that don't have the same sex as indicated by SSN
+* excludes samples with missingness above the given threshold
+* excludes samples with heterozygosity more than the given number of standard deviations above the mean (contamination)
+* excludes samples with an excessive number of relatives based on two round of pi-hat calculation with the given thresholds
+
+8. duplicates: Lists samples to include/exclude in each batch removing duplicates (same sample ID or _dupX suffix)
+* in a duplicate pair, the sample with more variants called is included in the data
+
+9. plots: Creates QC plots
+* done both for each genotyping batch and across batches
+
+10. filter_batch_to_vcf: Creates a VCF file excluding samples and variants based on the above QC
+* done for each genotyping batch
+
 ## Configuration
 
 Note that all input text files should be UTF-8 encoded
@@ -65,7 +125,7 @@ Example:
 zip dependencies
 ```
 cd wdl
-zip sub.zip qc_sub.wdl imp_sub.wdl post_subset_sub.wdl
+zip sub.zip imp_sub.wdl post_subset_sub.wdl
 cd ..
 ```
 
