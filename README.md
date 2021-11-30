@@ -61,6 +61,11 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 10. filter_batch_to_vcf: Creates a VCF file excluding samples and variants based on the above QC
 * done for each genotyping batch
 
+### Call graph from womtool
+
+![QC/imputation call graph](img/graphviz_20211130.png?raw=true)
+
+
 ## Configuration
 
 Note that all input text files should be UTF-8 encoded
