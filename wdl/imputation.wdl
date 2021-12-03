@@ -179,8 +179,10 @@ task filter_batch_to_vcf {
         sed -i 's/_dup[0-9]\+//' temp.fam
         # underscores cause trouble with vcf conversions
         sed -i 's/_/-/g' temp.fam
+        # remove extra contigs as those cause trouble downstream
+        awk '{split($2, a, "_"); if (a[2]!~"^[0-9]+$") print $0}' temp.bim > remove_extra_contigs
         # --vcf-half-call must be used with --vcf so two commands
-        $plink2_cmd --bfile temp --recode vcf-iid bgz --output-chr chrM --out temp
+        $plink2_cmd --bfile temp --exclude remove_extra_contigs --recode vcf-iid bgz --output-chr chrM --out temp
         $plink2_cmd --vcf temp.vcf.gz --recode vcf-iid bgz --vcf-half-call haploid --output-chr chrM --out ${base}
 
         bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' ${base}.vcf.gz -Oz -o ${base}_qcd.vcf.gz
