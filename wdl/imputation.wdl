@@ -575,6 +575,7 @@ task gather_snpstats_joint_qc {
             if (af1<${af}) print id,"joint_qc_alleleA_frequency",af1;
             if (af2<${af}) print id,"joint_qc_alleleB_frequency",af2;
             # allow rare variants with deficiency in homozygotes to escape hw
+            # (hw+0) because otherwise awk treats values of compromised precision (<1e-308) as strings
             if ((hw+0)<${hw} && (maf > ${escape_hwe_maf} || hom>exp_hom)) print id,"joint_qc_HW_exact_p_value",hw;
             if (miss>${variant_missing_overall}) print id,"joint_qc_missing_proportion",miss;
         }' ${name}.snpstats.txt >> ${name}.exclude_variants_joint_qc.txt
@@ -667,20 +668,14 @@ task panel_comparison {
         pval <- read.delim(pval, header = T, stringsAsFactors = F)
         af <- read.delim(af, header = T, stringsAsFactors = F)
         af_panel <- read.delim(af_panel, header = T, stringsAsFactors = F)
-        print(head(pval))
 
         ## Dataframe modifications and objects for plotting
         # For manhattan plot
         #colnames(pval)[c(1,2)] <- c("CHR", "BP") # required for manhattan
         colnames(pval)[1] <- "CHR" # required for manhattan
         colnames(pval)[2] <- "BP"
-        print(head(pval))
         pval[["CHR"]] <- sub("X", "23", pval[["CHR"]])
         pval[["CHR"]] <- as.integer(pval[["CHR"]]) # required for manhattan
-
-        print(head(pval))
-        print(head(af_panel))
-        print(head(af))
 
         # For output writing and AF plots
         colnames(af) <- colnames(af_panel) <- c("CHROM", "ID", "REF", "ALT", "AF")
@@ -740,6 +735,7 @@ task panel_comparison {
         sink()
         EOF
 
+        # ($a["P"]+0) because otherwise awk treats values of compromised precision (<1e-308) as strings
         awk 'BEGIN{OFS="\t"}NR==1{for(i=1;i<=NF;i++) a[$i]=i} NR>1 && ($a["P"]+0) < ${p} {print $1,"glm_panel",$a["P"]}' ${base}_panel_AF_glmfirthfallback.txt > ${base}.exclude_variants_panel_comparison.txt
 
     >>>
