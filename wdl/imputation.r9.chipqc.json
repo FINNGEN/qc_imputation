@@ -10,6 +10,7 @@
     "qc_imputation.fam_loc": "gs://r9_data/affy_tfam/tfam_loc.txt",
     "qc_imputation.exclude_samples_loc": "gs://r9_data/KD_modified_exclusion_lists/exclusion_list_combined_loc.txt",
     "qc_imputation.duplicate_samples": "gs://r9_data/THL_lists/finngen_R9_duplicate_list.txt",
+    "qc_imputation.exclude_denials": "gs://r9_data/THL_lists/finngen_R9_finngenid_exclusion_list.txt",
     "qc_imputation.include_regex": "^FG",
     "qc_imputation.vcf_to_bed.ref_fasta": "gs://finngen-imputation-panel/hg38_v0_Homo_sapiens_assembly38.fasta",
     "qc_imputation.chrs": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],

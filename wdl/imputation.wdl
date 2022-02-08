@@ -114,9 +114,19 @@ workflow qc_imputation {
 
     if (chip_qc) {
         scatter (i in range(length(vcfs))) {
-            call filter_batch_to_vcf {
-                input: bed=vcf_to_bed.out_bed[i], joint_qc_exclude_variants=gather_snpstats_joint_qc.exclude_variants_joint,
+            call filter_batch {
+                input: docker=docker, bed=vcf_to_bed.out_bed[i], joint_qc_exclude_variants=gather_snpstats_joint_qc.exclude_variants_joint,
                 batch_qc_exclude_variants=batch_qc.variants_exclude[i], exclude_samples=duplicates.allbatches_samples_exclude
+            }
+        }
+        scatter (chr in chrs) {
+            call merge_batches {
+                input: docker=docker, name=name+"_chr"+chr, chr=chr, beds=filter_batch.out_bed, bims=filter_batch.out_bim, fams=filter_batch.out_fam
+            }
+            call post_subset_sub.subset_samples as subset_samples_chip {
+                input: vcfs=[merge_batches.vcf], vcf_idxs=[merge_batches.vcf_idx], already_excluded_samples=duplicates.allbatches_samples_exclude,
+                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+                docker=docker
             }
         }
     }
@@ -130,8 +140,6 @@ workflow qc_imputation {
                 batch_qc_exclude_variants=batch_qc.variants_exclude, exclude_samples=duplicates.allbatches_samples_exclude, ref_panel=ref_panel
             }
 
-            ### TODO:DUPLICATE REMOVAL WITH DIFFERENT FINNGEN IDS.
-            ### add logic to subwf
             call post_subset_sub.subset_samples as subset_samples{
                 input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
                 exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
@@ -150,7 +158,7 @@ workflow qc_imputation {
     }
 }
 
-task filter_batch_to_vcf {
+task filter_batch {
 
     File bed
     File bim = sub(bed, ".bed$", ".bim")
@@ -159,7 +167,7 @@ task filter_batch_to_vcf {
     File joint_qc_exclude_variants
     File batch_qc_exclude_variants
     File exclude_samples
-    String dollar = "$"
+    String docker
 
     command <<<
 
@@ -170,35 +178,74 @@ task filter_batch_to_vcf {
 
         # get list of variants to exclude
         cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) | sort -u > exclude_variants.txt
+        # remove extra contigs as those cause trouble downstream
+        awk '{split($2, a, "_"); if (a[2]!~"^[0-9]+$") print $0}' ${bim} >> exclude_variants.txt
 
         ## Removing possible chr postfix
         awk -v base=${base} ' BEGIN{ batch=base; sub("_chr..?$","",batch)} $1==batch && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
 
-        $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --remove exclude_samples.txt --exclude exclude_variants.txt --make-bed --out temp
+        $plink2_cmd --bfile ${sub(bed, ".bed$", "")} --remove exclude_samples.txt --exclude exclude_variants.txt --make-bed --out ${base}
         # remove _dup suffix from fam
-        sed -i 's/_dup[0-9]\+//' temp.fam
+        sed -i 's/_dup[0-9]\+//' ${base}.fam
         # underscores cause trouble with vcf conversions
-        sed -i 's/_/-/g' temp.fam
-        # remove extra contigs as those cause trouble downstream
-        awk '{split($2, a, "_"); if (a[2]!~"^[0-9]+$") print $0}' temp.bim > remove_extra_contigs
-        # --vcf-half-call must be used with --vcf so two commands
-        $plink2_cmd --bfile temp --exclude remove_extra_contigs --recode vcf-iid bgz --output-chr chrM --out temp
-        $plink2_cmd --vcf temp.vcf.gz --recode vcf-iid bgz --vcf-half-call haploid --output-chr chrM --out ${base}
-
-        bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' ${base}.vcf.gz -Oz -o ${base}_qcd.vcf.gz
-        bcftools index -t -f ${base}_qcd.vcf.gz
+        sed -i 's/_/-/g' ${base}.fam
 
     >>>
 
     output {
-        File vcf = base + "_qcd.vcf.gz"
-        File vcf_tbi = base + "_qcd.vcf.gz.tbi"
+        File out_bed = base + ".bed"
+        File out_bim = base + ".bim"
+        File out_fam = base + ".fam"
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
+        docker: "${docker}"
         memory: "7 GB"
         cpu: 4
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
+task merge_batches {
+
+    String name
+    Int chr
+    Array[File] beds
+    Array[File] bims
+    Array[File] fams
+    String docker
+
+    command <<<
+
+        set -euxo pipefail
+
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
+
+        echo "`date`\tmerge"
+        cat ${write_lines(beds)} | sed 's/.bed//g' > merge_list.txt
+        plink --allow-extra-chr --keep-allele-order --merge-list merge_list.txt --chr ${chr} --memory $mem --make-bed --out plink_merged
+        echo "`date`\tplink to vcf"
+        plink2 --allow-extra-chr --bfile plink_merged --memory $mem --recode vcf-iid bgz --output-chr chrM --out plink_merged
+
+        # index and add info tags
+        echo "`date`\ttags"
+        bcftools +fill-tags plink_merged.vcf.gz -Oz -o ${name}.vcf.gz -- -t NS,AF,AC_Hom,AC_Het
+        echo "`date`\tindex vcf"
+        bcftools index -t -f ${name}.vcf.gz
+
+    >>>
+
+    output {
+        File vcf = name + ".vcf.gz"
+        File vcf_idx = name + ".vcf.gz.tbi"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "10 GB"
+        cpu: 2
         disks: "local-disk 200 HDD"
         preemptible: 2
         zones: "europe-west1-b europe-west1-c europe-west1-d"
