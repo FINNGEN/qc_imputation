@@ -51,6 +51,9 @@ task subset {
 
         cut -f 2 ${already_excluded_samples} | sort | uniq > removals
 
+        # remove _dup suffixes from sample summaries as there are no suffixes in the duplicate list
+        sed -i 's/_dup[0-9]\+//' ${sample_summaries}
+
         if [[ "$excl_denials_file" != "" ]]
         then
             cat $excl_denials_file >> removals
