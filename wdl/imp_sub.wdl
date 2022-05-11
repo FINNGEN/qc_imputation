@@ -4,24 +4,25 @@ workflow imputation {
     Array[String] beds
     String joint_qc_exclude_variants
     Array[String] batch_qc_exclude_variants
+    Array[String] panel_exclude_variants
     String force_impute_variants
     String exclude_samples
     Map[Int, String] ref_panel
-    Int n_batches = length(batch_qc_exclude_variants)
+    String docker
 
     File? exclude_denials
 
-    scatter (i in range(n_batches)) {
+    scatter (i in range(length(beds))) {
         call plink_to_vcf {
-            input: bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants,
-	    batch_qc_exclude_variants=batch_qc_exclude_variants[i], exclude_samples=exclude_samples,
-	    force_impute_variants=force_impute_variants
+            input: chr=chr, bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants,
+    	    batch_qc_exclude_variants=batch_qc_exclude_variants[i], panel_exclude_variants=panel_exclude_variants[i],
+            exclude_samples=exclude_samples, force_impute_variants=force_impute_variants, docker=docker
         }
         call phase_impute {
-            input: chr=chr, vcf=plink_to_vcf.vcf, ref_panel=ref_panel
+            input: chr=chr, vcf=plink_to_vcf.vcf, ref_panel=ref_panel, docker=docker
         }
         call post_imputation {
-            input: chr=chr, vcf=phase_impute.out_imputed
+            input: chr=chr, vcf=phase_impute.out_imputed, docker=docker
         }
     }
 
@@ -33,24 +34,28 @@ workflow imputation {
 
 task plink_to_vcf {
 
+    Int chr
     File bed
     File bim = sub(bed, ".bed$", ".bim")
     File fam = sub(bed, ".bed$", ".fam")
     String base = basename(bed, ".bed")
     File joint_qc_exclude_variants
     File batch_qc_exclude_variants
+    File panel_exclude_variants
     File exclude_samples
     File force_impute_variants
+    String docker
 
     command <<<
 
         set -euxo pipefail
 
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
-        plink2_cmd="plink2 --allow-extra-chr --memory $mem"
+        plink2_cmd="plink2 --allow-extra-chr --memory $mem --chr ${chr}"
 
         # get list of variants to exclude
-        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) ${force_impute_variants} | sort -u > exclude_variants.txt
+        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) \
+        <(cut -f1 ${panel_exclude_variants}) ${force_impute_variants} | sort -u > exclude_variants.txt
 
         ## Removing postfix
         awk -v base=${base} ' BEGIN{ batch=base; sub("_chr..?$","",batch)} $1==batch && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
@@ -64,16 +69,16 @@ task plink_to_vcf {
         $plink2_cmd --vcf temp.vcf.gz --recode vcf-iid bgz --vcf-half-call haploid --output-chr chrM --out ${base}
 
         bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' ${base}.vcf.gz -Ou | \
-        bcftools +fill-tags -Oz -o ${base}_qcd.vcf.gz -- -t AC,AN,AF
+        bcftools +fill-tags -Oz -o ${base}_chr${chr}_qcd.vcf.gz -- -t AC,AN,AF
 
     >>>
 
     output {
-        File vcf = base + "_qcd.vcf.gz"
+        File vcf = base + "_chr" + chr + "_qcd.vcf.gz"
         Array[File] png = glob("*.png")
     }
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
+        docker: "${docker}"
         memory: "7 GB"
         cpu: 4
         disks: "local-disk 200 HDD"
@@ -94,6 +99,7 @@ task phase_impute {
     File panel = ref_panel[chr]
     File genetic_map_eagle = genetic_maps_eagle[chr]
     File genetic_map_beagle = genetic_maps_beagle[chr]
+    String docker
     String dollar = "$"
 
     command <<<
@@ -124,11 +130,12 @@ task phase_impute {
     >>>
 
     output {
+        File out_phased = base + "_for_imputation.vcf.gz"
         File out_imputed = base + "_imputed.vcf.gz"
     }
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
+        docker: "${docker}"
         memory: "24 GB"
         cpu: 32
         disks: "local-disk 100 HDD"
@@ -147,6 +154,7 @@ task post_imputation {
 	File annot_tab
 	File annot_tab_index
 	String annot_col_incl
+    String docker
     String dollar = "$"
 
     command <<<
@@ -166,7 +174,7 @@ task post_imputation {
         time Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
 
         # annotate, edit tags and index
-        [[ ${base} =~ (.*)_chr[0-9]+ ]]
+        [[ ${base} =~ (.*)_qcd_imputed ]]
         batch=${dollar}{BASH_REMATCH[1]}
         edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch AR2: DR2: IMP:"
         time bcftools index -t -f ${base}_imputed_infotags.vcf.gz
@@ -179,7 +187,7 @@ task post_imputation {
     >>>
 
     runtime {
-        docker: "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2"
+        docker: "${docker}"
         memory: "16 GB"
         cpu: 2
         disks: "local-disk 200 HDD"

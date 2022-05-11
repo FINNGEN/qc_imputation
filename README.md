@@ -2,9 +2,9 @@
 
 Genotype QC and imputation pipeline
 
-Takes a list of VCF files and input parameters and performs variant and sample wise QC and imputation
+Takes a list of VCF files and input parameters and performs variant and sample wise QC for both chip QC and imputation purposes
 
-## QC steps: chip QC (with rare variants in mind, no imputation)
+## QC steps
 
 1. `vcf_to_bed`: Convert each VCF file to PLINK bed
 
@@ -18,7 +18,7 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 2. `glm_vs_panel`: Run PLINK glm firth-fallback against imputation panel to detect frequency deviations
 
 - done per genotyping batch
-- merges each bed with the panel on common variants and runs glm dataset vs. panel
+- merges each bed with the panel on shared variants and runs glm dataset vs. panel
 - covariates for glm: sex, PCs
 
 3. `missingness`: Compute variant missingness and list variants with high missingness
@@ -35,7 +35,6 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 
 - done across all genotyping batches
 - creates a list of variants to exclude from all batches
-- excludes non-ATCG variants (already excluded from the data for each batch in `vcf_to_bed` but listed also here for completeness)
 - excludes variants that were non-PASS (output of `vcf_to_bed`) in at least the given number of batches
 - excludes variants with high missingness (output of `missingness`) in at least the given number of batches
 - excludes variants with overall MAF below the given threshold (usually not used in practice i.e. the threshold is 0)
@@ -47,11 +46,14 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 - done per genotyping batch
 - takes glm stats computed in `glm_vs_panel`
 - lists variants with glm p-value less than the given threshold for exclusion
+- for imputation lists variants that are not in the panel or whose AF in the panel is less than the given threshold
+- creates AF comparison plots batch vs. panel
 
 7. `batch_qc`: Performs batch-wise QC
 
 - done per genotyping batch
-- variants listed for exclusion by `gather_snpstats_joint_qc` and `panel_comparison` are excluded up front before batch-wise QC
+- creates a list of variants to exclude from each batch
+- variants listed for exclusion by `vcf_to_bed`, `gather_snpstats_joint_qc` and `panel_comparison` are excluded up front before batch-wise QC
 - excludes variants with HWE exact p-value less than the given threshold
 - excludes variants with missingness above the given threshold
 - excludes samples that fail PLINK sex check with the given f thresholds
@@ -64,13 +66,14 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 
 - in a duplicate pair, the sample with more variants called is included in the data
 
-9. `plots`: Creates QC plots
+9. `plots`: Creates QC plots and creates variant and sample exclusion summaries
 
 - done both for each genotyping batch and across batches
 
 10. `filter_batch`: Filters the PLINK files of each batch file excluding samples and variants based on the above QC
 
 - done per genotyping batch
+- done for chip qc purpose only, not for imputation
 - excludes variants based on QC across batches (output of `gather_snpstats_joint_qc`)
 - excludes variants based on batch-wise QC (output of `batch_qc`)
 - excludes samples based on batch-wise QC with duplicates removed (output of `duplicates`)
@@ -78,11 +81,36 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 11. `merge_batches`: Merges genotyping batches
 
 - done per chromosome
+- done for chip qc purpose only, not for imputation
 - merges genotyping batch PLINK datasets (output of `filter_batch`) to a VCF
 
-12. `post_subset_sub.subset_samples`: Removes SSN duplicates and denials across batches
+Steps 12-14 are done in the `imp_sub.wdl` subworkflow for imputation
+
+12. `plink_to_vcf`: Converts the PLINK files of each batch to VCFs excluding samples and variants based on the above QC for imputation
+
+- done per genotyping batch and per chrosomome
+- excludes variants based on QC across batches (output of `gather_snpstats_joint_qc`)
+- excludes variants based on batch-wise QC (output of `batch_qc`)
+- excludes variants not in the imputation panel or low AF in the panel (output of `panel_comparison`)
+- excludes samples based on batch-wise QC with duplicates removed (output of `duplicates`)
+
+13. `phase_impute`: Phases (eagle) and imputes (beagle) each chromosome of each batch
+
+- done per genotyping batch and per chrosomome
+- uses the filtered genotype files (output of `plink_to_vcf`)
+- outputs phased genotype data and imputed genotype data
+
+14. `post_imputation`: Annotates imputed genotype files with INFO tags
+
+- done per genotyping batch and per chrosomome
+- adds AF, INFO, CHIP, AC_Het, AC_Hom, HWE tags to the VCF INFO field
+- creates AF/INFO plots
+- creates a tabix index
+
+15. `post_subset_sub.subset_samples`: Removes SSN duplicates and denials across batches
 
 - done across all genotyping batches
+- done separately for chip qc and imputation purposes
 - removes remaining SSN duplicates and denials based on given lists
 - biobank returns need to contain denials and SSN duplicates so this is done as the last thing
 
@@ -93,10 +121,10 @@ Note that all input text files should be UTF-8 encoded
 QC/imputation pipeline imputation.wdl inputs
 
 ```
-    "qc_imputation.docker" docker image to use
+    "qc_imputation.docker" docker image to use in QC tasks
+    "qc_imputation.imputation.docker" docker image to use in imputation tasks
     "qc_imputation.name": name of the run, e.g. r10_affy
-    "qc_imputation.run_imputation": true/false, whether to run also imputation or only QC
-    "qc_imputation.chip_qc": true/false, whether this is chip QC or not (e.g. whether to remove variants not in panel)
+    "qc_imputation.run_imputation": true/false, whether to run also imputation or only QC - best to first set this to false and check that the QC is fine before running imputation
     "qc_imputation.imputation.force_impute_variants": location of a list of variants to force imputation of even if they otherwise pass QC (can be an empty file),
     "qc_imputation.snpstats.run_joint_qc": true/false, whether to run joint qc across all batches or not
     "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
@@ -110,6 +138,7 @@ QC/imputation pipeline imputation.wdl inputs
     "qc_imputation.chrs": list of chromosomes to run
     "qc_imputation.genome_build": genome build version (38)
     "qc_imputation.panel_comparison.p": p-value threshold to use in excluding variants based on GWAS against panel, e.g. 5e-8
+    "qc_imputation.panel_comparison.af_panel": variants with AF smaller than this threshold will not be given to imputation
     "qc_imputation.high_ld_regions": location of list of high-LD regions of the genome
     "qc_imputation.glm_vs_panel.panel_bed": location of imputation panel PLINK bed file,
     "qc_imputation.glm_vs_panel.pca_ld": PLINK LD parameters to use in PCA in comparison against imputation panel
