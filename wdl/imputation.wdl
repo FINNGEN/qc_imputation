@@ -558,12 +558,21 @@ task duplicates {
             awk -v batch=$batch '{OFS="\t"; print batch,$0}' $batch.samples_include.txt >> all_batches.samples_include.txt
             awk -v batch=$batch '{OFS="\t"; print batch,$0}' $batch.samples_exclude.txt >> all_batches.samples_exclude.txt
         done
+          #Rplot fix for batches that have empty exclusion list
+          awk -v batch=$batch 'BEGIN {FS="\t";OFS="\t"} { if ($1==batch) print "exists"; else print "not_exist"}' all_batches.samples_exclude.txt > file1.txt
+           VAR=$(grep -E "not_exist" file1.txt| wc -l); echo $VAR
+           if [[ $VAR -gt 0 ]]; then
+           echo "batch does not exist in excluded samples"
+           echo -e "$batch\tFG00000000\tlist1\tNA" >> all_batches.samples_exclude.txt
+           echo -e "$batch\tFG00000001\tlist1\tNA" >> all_batches.samples_exclude.txt
+           fi
 
     >>>
 
     output {
         File allbatches_samples_include = "all_batches.samples_include.txt"
         File allbatches_samples_exclude = "all_batches.samples_exclude.txt"
+        File file1= "file1.txt"
     }
 
     runtime {
