@@ -1124,6 +1124,17 @@ task plots {
         else
             mv ${exclude_samples} excluded_samples
         fi
+        
+        #if excluded_samples is empty then generate a dummy excluded_samples
+        if [ -s excluded_samples ]
+        then
+        echo "excluded_samples exists"
+        else
+        echo "excluded_samples does not exists"
+        echo -e "${name}\tFG00000000\tlist1\tNA" >> excluded_samples
+        echo -e "${name}\tFG00000001\tlist1\tNA" >> excluded_samples
+        fi
+
         for file in ${sep=" " exclude_variants}; do mv $file .; done
         awk '{OFS="\t"; sub(".exclude_variants_batch_qc.txt", "", FILENAME); print FILENAME,$0}' *exclude_variants_batch_qc.txt > excluded_variants
 
