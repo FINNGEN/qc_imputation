@@ -144,7 +144,7 @@ task paste {
         File idx = outfile + ".tbi"
     }
     runtime {
-        docker: "gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
+        docker: "eu.gcr.io/finngen-factory-staging/qc_imputation:test_paste_0.1.0"
         memory: "12 GB"
         cpu: cpus
         disks: "local-disk 300 HDD"
@@ -644,6 +644,15 @@ task plots {
             require(ggplot2)
             require(ggpubr)
 
+            name <- "${name}"
+            if (file.exists("excluded_samples") & (file.size("excluded_samples") > 0)) {
+            print ("file exist")
+            } else {
+            print ("file not exist")
+            excluded_samples <- data.frame(batch=c(name,name), id=c("FG00000000", "FG00000001"), reason=c("list1","list1"), value=c("NA","NA"))
+            print(excluded_samples)
+            write.table(excluded_samples, file="excluded_samples", quote=FALSE, sep="\t", row.names = FALSE)
+            }
 
             batches <- fread("batches", header = F)[["V1"]]
 
@@ -753,6 +762,14 @@ task plots {
         options(bitmapType='cairo')
 
         name <- "${name}"
+            if (file.exists("excluded_samples") & (file.size("excluded_samples") > 0)) {
+            print ("file exist")
+            } else {
+            print ("file not exist")
+            excluded_samples <- data.frame(batch=c(name,name), id=c("FG00000000", "FG00000001"), reason=c("list1","list1"), value=c("NA","NA"))
+            print(excluded_samples)
+            write.table(excluded_samples, file="excluded_samples", quote=FALSE, sep="\t", row.names = FALSE)
+            }
         f1 <- ${f[0]}
         f2 <- ${f[1]}
         miss_thres <- c(${sample_missing}, ${variant_missing})
@@ -869,3 +886,4 @@ task plots {
         zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
+
