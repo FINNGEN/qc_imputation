@@ -14,6 +14,7 @@ workflow qc_imputation {
     Map[Int, String] ref_panel
     File panel_bed
     Array[Int] chrs
+    Array[Int] imputation_chrs
     String include_regex
     Int genome_build
     File high_ld_regions
@@ -31,7 +32,8 @@ workflow qc_imputation {
     scatter (i in range(length(vcfs))) {
         # convert batches from vcf to bed
         call vcf_to_bed {
-            input: vcf=vcfs[i], exclude_samples=exclude_samples[i], include_regex=include_regex, docker=docker
+            input: vcf=vcfs[i], exclude_samples=exclude_samples[i],
+            include_regex=include_regex, docker=docker
         }
         # run glm between each batch and panel
         call glm_vs_panel {
@@ -41,7 +43,7 @@ workflow qc_imputation {
         }
         # get variants to exclude based on missingness
         call missingness {
-            input: base=sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", ""),
+            input: base=sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", ""), f=f,
             bed=vcf_to_bed.out_bed, bim=vcf_to_bed.out_bim, fam=vcf_to_bed.out_fam, docker=docker
         }
     }
@@ -67,17 +69,28 @@ workflow qc_imputation {
         String base_batch = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
         # get variants to exclude based on panel comparison and create plot
         call panel_comparison {
-            input: base=base_batch, dataset_freq_panel_intersect=glm_vs_panel.dataset_freq_panel_intersect[i],
-            freq_panel=sub(panel_bed, ".bed$", ".afreq"), files_glm=[glm_vs_panel.glm[i]], bim=vcf_to_bed.out_bim[i], docker=docker
+            input: base=base_batch,
+            dataset_freq_panel_intersect=glm_vs_panel.dataset_freq_panel_intersect[i],
+            freq_panel=sub(panel_bed, ".bed$", ".afreq"), files_glm=[glm_vs_panel.glm[i]],
+            bim=vcf_to_bed.out_bim[i], docker=docker
         }
         # run batch-wise qc
         call batch_qc {
-            input: base=base_batch, beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
-            fam_sexcheck=fams_sexcheck[i], all_batch_variants=vcf_to_bed.all_batch_variants[i],
-            exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i], exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
-            exclude_variants_panel_comparison=panel_comparison.exclude_variants, genome_build=genome_build,
-            exclude_samples=exclude_samples[i], f=f, include_regex=include_regex, high_ld_regions=high_ld_regions, docker=docker
+            input: base=base_batch, beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]],
+            fams=[vcf_to_bed.out_fam[i]], fam_sexcheck=fams_sexcheck[i],
+            all_batch_variants=vcf_to_bed.all_batch_variants[i],
+            exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
+            exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
+            exclude_variants_panel_comparison=panel_comparison.exclude_variants,
+            genome_build=genome_build, exclude_samples=exclude_samples[i],
+            f=f, include_regex=include_regex, high_ld_regions=high_ld_regions,
+            docker=docker
         }
+    }
+
+    # collect variant exclusions of each batch
+    call gather_variant_exclusions {
+       input: name=name, excl_files=batch_qc.variants_exclude, docker=docker
     }
 
     # get duplicates (_dup or same ID) to remove across batches
@@ -90,70 +103,112 @@ workflow qc_imputation {
     scatter (i in range(length(vcfs))) {
         String base2 = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
         call plots {
-            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]], heterozygosity=[batch_qc.heterozygosity[i]],
-            exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
-            exclude_variants=[batch_qc.variants_exclude[i]], variant_missingness=[batch_qc.variant_missingness[i]],
-            sample_missingness=[batch_qc.sample_missingness[i]], sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
-            pihat_n=[batch_qc.pihat_n[i]],
-            pihat_n_raw=[batch_qc.pihat_n_raw[i]], variant_missing=batch_qc.variant_missing_threshold[i],
+            input: name=base2, joint=false, sexcheck=[batch_qc.sexcheck[i]],
+            heterozygosity=[batch_qc.heterozygosity[i]],
+            exclude_samples=duplicates.allbatches_samples_exclude,
+            all_batch_var_freq=[batch_qc.all_batch_var_freq[i]],
+            exclude_variants=[batch_qc.variants_exclude[i]],
+            variant_missingness=[batch_qc.variant_missingness[i]],
+            sample_missingness=[batch_qc.sample_missingness[i]],
+            sample_missingness_raw=[batch_qc.sample_missingness_raw[i]],
+            pihat_n=[batch_qc.pihat_n[i]], pihat_n_raw=[batch_qc.pihat_n_raw[i]],
+            variant_missing=batch_qc.variant_missing_threshold[i],
             sample_missing=batch_qc.sample_missing_threshold[i],
-            f=f, het_sd=batch_qc.het_sd_threshold[i], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],docker=docker
+            f=f, het_sd=batch_qc.het_sd_threshold[i],
+            pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[i],
+            docker=docker
         }
     }
 
     # create plots across all batches
     call plots as joint_plots {
-        input: name=name, joint=true, sexcheck=batch_qc.sexcheck, heterozygosity=batch_qc.heterozygosity,
-        exclude_samples=duplicates.allbatches_samples_exclude,all_batch_var_freq=batch_qc.all_batch_var_freq,
-        exclude_variants=batch_qc.variants_exclude, variant_missingness=batch_qc.variant_missingness,
-        sample_missingness=batch_qc.sample_missingness, sample_missingness_raw=batch_qc.sample_missingness_raw, pihat_n=batch_qc.pihat_n,
-        pihat_n_raw=batch_qc.pihat_n_raw, variant_missing=batch_qc.variant_missing_threshold[0],
+        input: name=name, joint=true, sexcheck=batch_qc.sexcheck,
+        heterozygosity=batch_qc.heterozygosity,
+        exclude_samples=duplicates.allbatches_samples_exclude,
+        all_batch_var_freq=batch_qc.all_batch_var_freq,
+        exclude_variants=batch_qc.variants_exclude,
+        variant_missingness=batch_qc.variant_missingness,
+        sample_missingness=batch_qc.sample_missingness,
+        sample_missingness_raw=batch_qc.sample_missingness_raw,
+        pihat_n=batch_qc.pihat_n, pihat_n_raw=batch_qc.pihat_n_raw,
+        variant_missing=batch_qc.variant_missing_threshold[0],
         sample_missing=batch_qc.sample_missing_threshold[0],
-        f=f, het_sd=batch_qc.het_sd_threshold[0], pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0], docker=docker
+        f=f, het_sd=batch_qc.het_sd_threshold[0],
+        pi_hat_min_n=batch_qc.pi_hat_min_n_threshold[0],
+        docker=docker
     }
 
     # for chip qc, filter variants and samples in batches as per qc and merge batches
     scatter (i in range(length(vcfs))) {
         call filter_batch {
-            input: docker=docker, bed=vcf_to_bed.out_bed[i], joint_qc_exclude_variants=gather_snpstats_joint_qc.exclude_variants_joint,
-            batch_qc_exclude_variants=batch_qc.variants_exclude[i], exclude_samples=duplicates.allbatches_samples_exclude
+            input: docker=docker, bed=vcf_to_bed.out_bed[i],
+            batch_qc_exclude_variants=batch_qc.variants_exclude[i],
+            exclude_samples=duplicates.allbatches_samples_exclude
         }
     }
     scatter (chr in chrs) {
         call merge_batches {
-            input: docker=docker, name=name+"_chr"+chr, chr=chr, beds=filter_batch.out_bed, bims=filter_batch.out_bim, fams=filter_batch.out_fam
+            input: docker=docker, name=name+"_chr"+chr, chr=chr,
+            beds=filter_batch.out_bed, bims=filter_batch.out_bim, fams=filter_batch.out_fam
         }
         call post_subset_sub.subset_samples as subset_samples_chip {
-            input: vcfs=[merge_batches.vcf], vcf_idxs=[merge_batches.vcf_idx], already_excluded_samples=duplicates.allbatches_samples_exclude,
-            exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+            input: vcfs=[merge_batches.vcf], vcf_idxs=[merge_batches.vcf_idx],
+            already_excluded_samples=duplicates.allbatches_samples_exclude,
+            exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
+            sample_summaries=joint_plots.sample_summaries,
             docker=docker
         }
     }
-
+    
+    # merge chip data across chromosomes
+    call merge_chip_data {
+        input: name=name, vcfs=subset_samples_chip.subset_vcfs, docker=docker
+    }
+    
     if (run_imputation) {
         # run imputation per chromosome
-        scatter (i in range(length(chrs))) {
+        scatter (i in range(length(imputation_chrs))) {
             call imp_sub.imputation as imputation {
-                input: chr=chrs[i], beds=vcf_to_bed.out_bed, joint_qc_exclude_variants=gather_snpstats_joint_qc.exclude_variants_joint,
-                batch_qc_exclude_variants=batch_qc.variants_exclude, panel_exclude_variants=panel_comparison.exclude_variants_panel,
-                exclude_samples=duplicates.allbatches_samples_exclude, ref_panel=ref_panel
+                input: chr=imputation_chrs[i], beds=vcf_to_bed.out_bed,
+                batch_qc_exclude_variants=batch_qc.variants_exclude,
+                panel_exclude_variants=panel_comparison.exclude_variants_panel,
+                exclude_samples=duplicates.allbatches_samples_exclude,
+                ref_panel=ref_panel
             }
             call post_subset_sub.subset_samples as subset_samples {
-                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs, already_excluded_samples=duplicates.allbatches_samples_exclude,
-                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples, sample_summaries=joint_plots.sample_summaries,
+                input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs,
+                already_excluded_samples=duplicates.allbatches_samples_exclude,
+                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
+                sample_summaries=joint_plots.sample_summaries,
                 docker=docker
             }
         }
-
         if ( length(vcfs)>1 ) {
-            scatter (i in range(length(chrs))) {
+            scatter (i in range(length(imputation_chrs))) {
                 call paste {
-                     input: vcfs=subset_samples.subset_vcfs[i], outfile=name+"_all_chr"+chrs[i]+".vcf.gz",
+                     input: vcfs=subset_samples.subset_vcfs[i],
+                     outfile=name+"_all_chr"+imputation_chrs[i]+".vcf.gz",
                      docker=docker
                 }
             }
         }
     }
+    
+#    output {
+#        File variant_exclusions = gather_variant_exclusions.out
+#        Array[File] qc_plots = joint_plots.png
+#        File variant_summaries = joint_plots.summaries
+#        File sample_summaries = joint_plots.sample_summaries
+#        File exclude_vars_dists = joint_plots.exclude_vars_dists
+#        File chip_allchr_vcf = merge_chip_data.vcf
+#        File chip_allchr_vcf_idx = merge_chip_data.vcf_idx
+#        File chip_allchr_bed = merge_chip_data.bed
+#        File chip_allchr_bim = merge_chip_data.bim
+#        File chip_allchr_fam = merge_chip_data.fam
+#        File chip_allchr_afreq = merge_chip_data.afreq
+#        Array[Array[File]]? imputed_vcf = subset_samples.subset_vcfs
+#        Array[Array[File]]? imputed_vcf_idx = subset_samples.subset_vcfs_idx
+#    }
 }
 
 task vcf_to_bed {
@@ -163,9 +218,9 @@ task vcf_to_bed {
     File exclude_samples
     String include_regex
     File ref_fasta
-
     String docker
 
+    # TODO the two awk commands can be combined, filtering out non-PASS non-ATCG before aligning?
     command <<<
 
         set -euxo pipefail
@@ -174,30 +229,41 @@ task vcf_to_bed {
         if [[ ${vcf} == *.gz ]] || [[ ${vcf} == *.bgz ]]; then catcmd="zcat"; fi
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
 
-        # filter by given samples and prefix, align to reference, unpack multiallelics, remove Y/MT/extra contigs, rename variant id to chr1_1234_A_T
+        # filter by given samples and prefix, align to reference, unpack multiallelics, remove extra contigs
         echo -e "`date`\talign"
-        comm -23 <($catcmd ${vcf} | grep -E "^#CHROM" | head -1 | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) <(cut -f1 ${exclude_samples} | sort) > include_samples.txt
+        comm -23 \
+        <($catcmd ${vcf} | grep -E "^#CHROM" | head -1 | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
+        <(cut -f1 ${exclude_samples} | sort) > include_samples.txt
+        
         bcftools view -m 2 -M 2 -S include_samples.txt ${vcf} -Ov | \
-        awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;} \
-                    $1 !~ "^#" \
-                    {  \
-                        ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid. \
+        awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
+                    $1 !~ "^#" {
+                        ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
                         sub("chr", "", $1); $1="chr"$1;
-                        ## rid Y/MT/extra contigs
-                        if ($1~"chr[0-9]+|chrX") {
+                        ## rid extra contigs
+                        if ($1~"chr[0-9]+|chrX|chrY|chrM") {
+                            sub("chrMT", "chrM", $1); # mitochondrial is MT in Affy data and chrM in 38 fasta
                             print $0;
                         }
-                    } \
+                    }
             ' | \
         bcftools norm -f ${ref_fasta} -c ws -Ov -o ${base}.aligned.vcf
         grep -Ev "^#" ${base}.aligned.vcf | awk '{print $1"_"$2"_"$4"_"$5}' > ${base}.original_variants_nofilter.txt
         
         echo -e "`date`\tfilter out non-PASS non-ATCG variants, rename variant id to chr1_1234_A_T"
-        awk 'BEGIN{OFS="\t"} $1 ~ "^#"{print $0} \
-            $1 !~ "^#" \
-                {  \
-                    sub("chr", "", $1); $1="chr"$1; $3=$1"_"$2"_"$4"_"$5; \
-                    if( $7 == "PASS" && $5~"^[ATCG]+$") {print $0 } else { if($7!="PASS") { print $3,"batch_non_pass",$7 > "${base}.exclude_variants_nonpass_nonstdalt.txt" }; if($5!~"^[ATCG]+$") { print $3,"non_std_alt",$5 > "${base}.exclude_variants_nonpass_nonstdalt.txt"  } } \
+        awk 'BEGIN{OFS="\t"} $1 ~ "^#"{print $0}
+            $1 !~ "^#" {
+                    sub("chr", "", $1); $1="chr"$1; $3=$1"_"$2"_"$4"_"$5;
+                    if( $7 == "PASS" && $5~"^[ATCG]+$") {
+                        print $0
+                    } else {
+                        if($7!="PASS") {
+                            print $3,"batch_non_pass",$7 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
+                        }
+                        if($5!~"^[ATCG]+$") {
+                            print $3,"non_std_alt",$5 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
+                        }
+                    }
                 } ' ${base}.aligned.vcf | bgzip -@2 > ${base}.vcf.gz
         tabix -p vcf ${base}.vcf.gz
 
@@ -330,6 +396,7 @@ task missingness {
     File bim
     File fam
     Float variant_missing_n_batches
+    Array[Float] f
     String docker
 
     String dollar = "$"
@@ -340,22 +407,26 @@ task missingness {
 
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
         plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
+        plink2_cmd="plink2 --allow-extra-chr --memory $mem"
 
-        $plink_cmd --bfile ${sub(bed, "\\.bed", "")} --missing --out ${base}
-
+        # impute sex to get Y chr missingness computed
+        $plink_cmd --bfile ${sub(bed, "\\.bed", "")} --impute-sex ${sep=" " f} --make-bed --out ${base}
+        
+        $plink2_cmd --bfile ${base} --missing --out ${base}
+        
         awk -v batch=${base} 'BEGIN {OFS="\t"} \
             NR==1 {
                 for(i=1;i<=NF;i++) { h[$i]=i }; \
-                if( !("F_MISS" in h && "SNP" in h) ) \
-                    {print "F_MISS and SNP columns expected in plink output." > "/dev/stderr"; exit 1; \
+                if( !("F_MISS" in h && "ID" in h) ) \
+                    {print "F_MISS and ID columns expected in plink output." > "/dev/stderr"; exit 1; \
                 }  \
             } \
             NR>1 { \
                 if($h["F_MISS"]>${variant_missing_n_batches}) { \
-                    print $h["SNP"],"joint_qc_batch_high_missing",batch":"$h["F_MISS"]
+                    print $h["ID"],"joint_qc_batch_high_missing",batch":"$h["F_MISS"]
                 }\
             } \
-            ' ${base}".lmiss" >> ${base}.exclude_variants_single_batch_missingness.txt
+            ' ${base}".vmiss" >> ${base}.exclude_variants_single_batch_missingness.txt
 
     >>>
 
@@ -475,8 +546,9 @@ task gather_snpstats_joint_qc {
     Float hw
     Float escape_hwe_maf
     Float variant_missing_overall
-    Int non_pass_n_batches
-    Int missingness_n_batches
+    Float non_pass_n_batches_prop
+    Float missingness_n_batches_prop
+    Int n_batches=length(exclude_variants_batch_nonpass)
     String docker
 
     command <<<
@@ -488,13 +560,14 @@ task gather_snpstats_joint_qc {
         done
 
         # add variants that were non-PASS in the original data in given number of batches
-        grep batch_non_pass ${name}.exclude_upstream_variants.txt | \
+        # grep returns 1 if no match
+        { grep batch_non_pass ${name}.exclude_upstream_variants.txt || test $?=1; } | \
         datamash -s -g 1 count 2 | \
-        awk 'BEGIN{OFS="\t"} $2>=${non_pass_n_batches} {print $1,"joint_qc_batch_non_pass",$2}' \
+        awk 'BEGIN{OFS="\t"} $2>=${non_pass_n_batches_prop}*${n_batches} {print $1,"joint_qc_batch_non_pass",$2}' \
         > ${name}.exclude_variants_joint_qc.txt
 
         # add variants that were PASS in the original data but didn't pass in in original conversion from vcf to plink (practically CNV and some multiallelics)
-        grep -v batch_non_pass ${name}.exclude_upstream_variants.txt | \
+        { grep -v batch_non_pass ${name}.exclude_upstream_variants.txt || test $?=1; } | \
         awk 'BEGIN{OFS="\t"} !seen[$0]++ {$2="joint_qc_"$2; print $0}' \
         >> ${name}.exclude_variants_joint_qc.txt
 
@@ -503,7 +576,7 @@ task gather_snpstats_joint_qc {
             cat $file >> ${name}.exclude_variants_batch_missingness.txt
         done
         datamash -s -g 1 count 2 < ${name}.exclude_variants_batch_missingness.txt | \
-        awk 'BEGIN{OFS="\t"} $2>=${missingness_n_batches} {print $1,"joint_qc_batch_high_missing",$2}' \
+        awk 'BEGIN{OFS="\t"} $2>=${missingness_n_batches_prop}*${n_batches} {print $1,"joint_qc_batch_high_missing",$2}' \
         >> ${name}.exclude_variants_joint_qc.txt
 
         # combine snpstats to one file
@@ -531,8 +604,9 @@ task gather_snpstats_joint_qc {
             if (af1<${af}) print id,"joint_qc_alleleA_frequency",af1;
             if (af2<${af}) print id,"joint_qc_alleleB_frequency",af2;
             # allow rare variants with deficiency in homozygotes to escape hw
+            # and no hwe for Y/MT chromosomes
             # (hw+0) because otherwise awk treats values of compromised precision (<1e-308) as strings
-            if ((hw+0)<${hw} && (maf > ${escape_hwe_maf} || hom>exp_hom)) print id,"joint_qc_HW_exact_p_value",hw;
+            if ((hw+0)<${hw} && $h["chromosome"] < 24 && (maf > ${escape_hwe_maf} || hom>exp_hom)) print id,"joint_qc_HW_exact_p_value",hw;
             if (miss>${variant_missing_overall}) print id,"joint_qc_missing_proportion",miss;
         }' ${name}.snpstats.txt >> ${name}.exclude_variants_joint_qc.txt
 
@@ -780,8 +854,9 @@ task batch_qc {
 
         echo "remove samples not passing sex check and given samples and filter by hw"
         echo -e "`date`\thwe"
-        $plink2_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) \
-              --hardy --hwe ${hw} --make-bed --out plink_data_after_hwe
+        # need to first remove samples and then compute --hardy as there seems to be a bug when using --remove with --hardy
+        $plink2_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${base}.samples_exclude.txt | sort -u) --make-bed --out samples_excluded
+        $plink2_cmd --bfile samples_excluded --hardy --hwe ${hw} --make-bed --out plink_data_after_hwe
         awk ' NR==1{ for(i=1;i<=NF;i++)  { h[$i]=i; if((!"ID" in h) || (! "P" in h)) { print "ID and P fields expected in HARDY" >>"/dev/stderr"; exit 1} } }  \
             NR>1&&$h["P"]<${hw} {OFS="\t"; print $h["ID"],"hwe",$h["P"]}' plink_data_after_hwe.hardy >> ${base}.exclude_variants_batch_qc.txt
         cp plink_data_after_hwe.hardy ${base}.hardy
@@ -906,6 +981,36 @@ task batch_qc {
         Float het_sd_threshold = het_sd
         Int pi_hat_min_n_threshold = pi_hat_min_n
         Int pi_hat_min_n_excess_threshold =pi_hat_min_n_excess
+    }
+}
+
+task gather_variant_exclusions {
+    
+    String name
+    Array[File] excl_files
+    String docker
+    String dollar="$"
+    
+    command <<<
+        set -euxo pipefail
+        echo -e "BATCH\tVARIANT\tREASON\tVALUE" > ${name}.all_chip_qc_variant_exclusions.tsv
+        for file in ${sep=" " excl_files}; do
+            batch=`basename "${dollar}{file%%.*}"` # batch is everything down to first period
+            awk -v batch=$batch 'BEGIN{OFS="\t"} {print batch,$0}' $file >> ${name}.all_chip_qc_variant_exclusions.tsv
+        done
+    >>>
+    
+    output {
+        File out = name + ".all_chip_qc_variant_exclusions.tsv"
+    }
+    
+    runtime {
+        docker: "${docker}"
+        memory: "1 GB"
+        cpu: 1
+        disks: "local-disk 100 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
 
@@ -1264,7 +1369,6 @@ task filter_batch {
     File bim = sub(bed, ".bed$", ".bim")
     File fam = sub(bed, ".bed$", ".fam")
     String base = basename(bed, ".bed")
-    File joint_qc_exclude_variants
     File batch_qc_exclude_variants
     File exclude_samples
     String docker
@@ -1277,7 +1381,7 @@ task filter_batch {
         plink2_cmd="plink2 --allow-extra-chr --memory $mem"
 
         # get list of variants to exclude
-        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) | sort -u > exclude_variants.txt
+        cut -f1 ${batch_qc_exclude_variants} | sort -u > exclude_variants.txt
         # remove extra contigs as those cause trouble downstream
         awk '{split($2, a, "_"); if (a[2]!~"^[0-9]+$") print $0}' ${bim} >> exclude_variants.txt
 
@@ -1346,6 +1450,46 @@ task merge_batches {
         docker: "${docker}"
         memory: "10 GB"
         cpu: 2
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
+task merge_chip_data {
+    
+    String name
+    Array[Array[File]] vcfs
+    Array[File] vcfs_flat = flatten(vcfs)
+    String docker
+
+    command <<<
+        set -euxo pipefail
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
+        for file in ${sep=" " vcfs_flat}; do
+            plink2 --vcf $file --make-bed --out `basename $file .gz`
+        done
+        ls -1 *.bed | xargs -I{} basename {} .bed > mergelist
+        plink --allow-extra-chr --keep-allele-order --memory $mem --merge-list mergelist --make-bed --out ${name}_chip_allchr
+        plink2 --allow-extra-chr --freq --bfile ${name}_chip_allchr --out ${name}_chip_allchr
+        # PLINK2 creates VCF 4.3 without --export that some tools don't accept so use PLINK 1.9 to create VCF 4.2 with Y/MT coded as homozygous diploid
+        plink --keep-allele-order --allow-extra-chr --bfile ${name}_chip_allchr --memory $mem --recode vcf-iid bgz --output-chr chrM --out ${name}_chip_allchr
+        tabix -p vcf ${name}_chip_allchr.vcf.gz
+    >>>
+
+    output {
+        File vcf = name + "_chip_allchr.vcf.gz"
+        File vcf_idx = name + "_chip_allchr.vcf.gz.tbi"
+        File bed = name + "_chip_allchr.bed"
+        File bim = name + "_chip_allchr.bim"
+        File fam = name + "_chip_allchr.fam"
+        File afreq = name + "_chip_allchr.afreq"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "30 GB"
+        cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
         zones: "europe-west1-b europe-west1-c europe-west1-d"

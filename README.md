@@ -84,7 +84,7 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 - done for chip qc purpose only, not for imputation
 - merges genotyping batch PLINK datasets (output of `filter_batch`) to a VCF
 
-Steps 12-14 are done in the `imp_sub.wdl` subworkflow for imputation
+Steps 12-14 are done in the `imp_sub.wdl` subworkflow for imputation if the `run_imputation` input flag is set
 
 12. `plink_to_vcf`: Converts the PLINK files of each batch to VCFs excluding samples and variants based on the above QC for imputation
 
@@ -109,10 +109,15 @@ Steps 12-14 are done in the `imp_sub.wdl` subworkflow for imputation
 
 15. `post_subset_sub.subset_samples`: Removes SSN duplicates and denials across batches
 
-- done across all genotyping batches
+- done across all genotyping batches per chromosome
 - done separately for chip qc and imputation purposes
 - removes remaining SSN duplicates and denials based on given lists
 - biobank returns need to contain denials and SSN duplicates so this is done as the last thing
+
+16. `merge_chip_data`: Merges chip data into one dataset
+
+- done across all genotyping batches and chromosomes
+- merges chip data after `post_subset_sub.subset_samples` to one VCF and PLINK dataset
 
 ## Configuration
 

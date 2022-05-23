@@ -2,7 +2,6 @@ workflow imputation {
 
     Int chr
     Array[String] beds
-    String joint_qc_exclude_variants
     Array[String] batch_qc_exclude_variants
     Array[String] panel_exclude_variants
     String force_impute_variants
@@ -14,12 +13,16 @@ workflow imputation {
 
     scatter (i in range(length(beds))) {
         call plink_to_vcf {
-            input: chr=chr, bed=beds[i], joint_qc_exclude_variants=joint_qc_exclude_variants,
-    	    batch_qc_exclude_variants=batch_qc_exclude_variants[i], panel_exclude_variants=panel_exclude_variants[i],
-            exclude_samples=exclude_samples, force_impute_variants=force_impute_variants, docker=docker
+            input: chr=chr, bed=beds[i],
+            batch_qc_exclude_variants=batch_qc_exclude_variants[i],
+            panel_exclude_variants=panel_exclude_variants[i],
+            exclude_samples=exclude_samples,
+            force_impute_variants=force_impute_variants,
+            docker=docker
         }
         call phase_impute {
-            input: chr=chr, vcf=plink_to_vcf.vcf, ref_panel=ref_panel, docker=docker
+            input: chr=chr, vcf=plink_to_vcf.vcf,
+            ref_panel=ref_panel, docker=docker
         }
         call post_imputation {
             input: chr=chr, vcf=phase_impute.out_imputed, docker=docker
@@ -39,7 +42,6 @@ task plink_to_vcf {
     File bim = sub(bed, ".bed$", ".bim")
     File fam = sub(bed, ".bed$", ".fam")
     String base = basename(bed, ".bed")
-    File joint_qc_exclude_variants
     File batch_qc_exclude_variants
     File panel_exclude_variants
     File exclude_samples
@@ -54,8 +56,10 @@ task plink_to_vcf {
         plink2_cmd="plink2 --allow-extra-chr --memory $mem --chr ${chr}"
 
         # get list of variants to exclude
-        cat <(cut -f1 ${joint_qc_exclude_variants}) <(cut -f1 ${batch_qc_exclude_variants}) \
-        <(cut -f1 ${panel_exclude_variants}) ${force_impute_variants} | sort -u > exclude_variants.txt
+        cat \
+        <(cut -f1 ${batch_qc_exclude_variants}) \
+        <(cut -f1 ${panel_exclude_variants}) ${force_impute_variants} | \
+        sort -u > exclude_variants.txt
 
         ## Removing postfix
         awk -v base=${base} ' BEGIN{ batch=base; sub("_chr..?$","",batch)} $1==batch && !seen[$2]++ {print 0,$2}' ${exclude_samples} > exclude_samples.txt
