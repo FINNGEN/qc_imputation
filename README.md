@@ -123,7 +123,7 @@ Steps 12-14 are done in the `imp_sub.wdl` subworkflow for imputation if the `run
 
 Note that all input text files should be UTF-8 encoded
 
-QC/imputation pipeline imputation.wdl inputs
+QC/imputation pipeline qc_imputation.wdl inputs
 
 ```
     "qc_imputation.docker" docker image to use in QC tasks
@@ -201,7 +201,7 @@ CromwellInteract.py connect cromwell-machine-name
 Then run pipeline, e.g. for legacy batches
 
 ```
-CromwellInteract.py submit --wdl wdl/imputation.wdl --inputs wdl/imputation.r7.legacy.json --deps wdl/sub.zip
+CromwellInteract.py submit --wdl wdl/qc_imputation.wdl --inputs wdl/imputation.r7.legacy.json --deps wdl/sub.zip
 ```
 
 ## Copying output to targe buckets
