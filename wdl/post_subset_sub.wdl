@@ -51,6 +51,9 @@ task subset {
 
         cut -f 2 ${already_excluded_samples} | sort | uniq > removals
 
+        # remove _dup suffixes from sample summaries as there are no suffixes in the duplicate list
+        sed -i 's/_dup[0-9]\+//' ${sample_summaries}
+
         if [[ "$excl_denials_file" != "" ]]
         then
             cat $excl_denials_file >> removals
@@ -138,9 +141,10 @@ task subset {
 
     runtime {
         docker: "${docker}"
-        memory: "7 GB"
         cpu: 1
+        memory: "7 GB"
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
