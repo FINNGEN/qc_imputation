@@ -140,20 +140,21 @@ QC/imputation pipeline qc_imputation.wdl inputs
     "qc_imputation.exclude_denials": location of denial list
     "qc_imputation.include_regex": regex of samples to include in the run, e.g. "^FG" to only include FinnGen ids
     "qc_imputation.vcf_to_bed.ref_fasta": location of reference genome FASTA file
-    "qc_imputation.chrs": list of chromosomes to run
+    "qc_imputation.chrs": list of chromosomes to run QC for (can include 24 (Y) and 26 (MT) that won't be imputed)
+    "qc_imputation.imputation_chrs": list of chromosomes to impute - it's possible to e.g. run imputation of a specific chromosome after doing QC for all chromosomes
     "qc_imputation.genome_build": genome build version (38)
     "qc_imputation.panel_comparison.p": p-value threshold to use in excluding variants based on GWAS against panel, e.g. 5e-8
     "qc_imputation.panel_comparison.af_panel": variants with AF smaller than this threshold will not be given to imputation
     "qc_imputation.high_ld_regions": location of list of high-LD regions of the genome
-    "qc_imputation.glm_vs_panel.panel_bed": location of imputation panel PLINK bed file,
+    "qc_imputation.panel_bed": location of imputation panel PLINK bed file
     "qc_imputation.glm_vs_panel.pca_ld": PLINK LD parameters to use in PCA in comparison against imputation panel
     "qc_imputation.glm_vs_panel.pca_maf": minimum allele frequency to use in PCA in comparison against imputation panel
-    "qc_imputation.missingness.variant_missing_n_batches": if there are at least `qc_imputation.gather_snpstats_joint_qc.missingness_n_batches` batches with missingness higher than this threshold, the variant will be excluded from all batches
+    "qc_imputation.missingness.variant_missing_n_batches": if there are at least `qc_imputation.gather_snpstats_joint_qc.missingness_n_batches_prop` times n_batches batches with missingness higher than this threshold, the variant will be excluded from all batches
+    "qc_imputation.gather_snpstats_joint_qc.missingness_n_batches_prop": variants with missingness higher than `qc_imputation.missingness.variant_missing_n_batches` in at least this proportion of batches will be excluded from all batches
     "qc_imputation.gather_snpstats_joint_qc.af": minimum allele frequency in the genotype data - variants below this frequency will be excluded from imputation - this can be 0 as we're using the imputation panel to determine minimum frequency to use
     "qc_imputation.gather_snpstats_joint_qc.hw": HWE p-value threshold - variants below this threshold across all batches will be excluded
     "qc_imputation.gather_snpstats_joint_qc.escape_hwe_maf": variants with frequency smaller than this threshold and with homozygote deficiency escape HWE check across batches
-    "qc_imputation.gather_snpstats_joint_qc.non_pass_n_batches": variants that didn't pass Affy QC pipeline in at least this number of batches will be removed from all batches
-    "qc_imputation.gather_snpstats_joint_qc.missingness_n_batches": variants with missingness higher than `qc_imputation.missingness.variant_missing_n_batches` in at least this number of batches will be excluded from all batches
+    "qc_imputation.gather_snpstats_joint_qc.non_pass_n_batches_prop": variants that didn't pass Affy QC pipeline in at least this proportion of batches will be removed from all batches
     "qc_imputation.gather_snpstats_joint_qc.variant_missing_overall": maximum variant missingness computed across all batches - variants above this missingness will be excluded - this can be 1 because different batches may contain different variants which can lead to high overall missingness
     "qc_imputation.f": PLINK F thresholds for determining genotype sex - individuals between this range will be excluded
     "qc_imputation.batch_qc.ssn_sex": location of list of social security number based sexes
