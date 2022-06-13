@@ -1,5 +1,6 @@
 import "imp_sub.wdl" as imp_sub
 import "post_subset_sub.wdl" as post_subset_sub
+import "merge_chunks.wdl" as  merge_sub
 
 workflow qc_imputation {
 
@@ -186,10 +187,10 @@ workflow qc_imputation {
         }
         if ( length(vcfs)>1 ) {
             scatter (i in range(length(imputation_chrs))) {
-                call paste {
+                call merge_sub.merge_in_chunks {
                      input: vcfs=subset_samples.subset_vcfs[i],
-                     outfile=name+"_all_chr"+imputation_chrs[i]+".vcf.gz",
-                     docker=docker
+		     outfile=name+"_all_chr"+imputation_chrs[i]+".vcf.gz",
+                     docker=docker, chunksize=20000
                 }
             }
         }
