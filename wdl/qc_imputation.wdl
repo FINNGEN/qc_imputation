@@ -72,7 +72,7 @@ workflow qc_imputation {
             input: base=base_batch,
             dataset_freq_panel_intersect=glm_vs_panel.dataset_freq_panel_intersect[i],
             freq_panel=sub(panel_bed, ".bed$", ".afreq"), files_glm=[glm_vs_panel.glm[i]],
-            bim=vcf_to_bed.out_bim[i], docker=docker
+            files_fisher=[glm_vs_panel.fisher[i]], bim=vcf_to_bed.out_bim[i], docker=docker
         }
         # run batch-wise qc
         call batch_qc {
@@ -161,9 +161,9 @@ workflow qc_imputation {
     }
     
     # merge chip data across chromosomes
-    call merge_chip_data {
-        input: name=name, vcfs=subset_samples_chip.subset_vcfs, docker=docker
-    }
+    #call merge_chip_data {
+    #    input: name=name, vcfs=subset_samples_chip.subset_vcfs, docker=docker
+    #}
     
     if (run_imputation) {
         # run imputation per chromosome
@@ -361,9 +361,20 @@ task glm_vs_panel {
         awk 'BEGIN{OFS="\t"} {print "0", $2, "2"}' gt_panel_isec.fam >> pheno
         $plink2_cmd --bfile merged --mind ${sample_missing_for_pca} --const-fid --glm firth-fallback --covar ${base}.eigenvec --pheno pheno --out ${base}
 
-        echo -e "`date`\tcompute frequencies"
         # extract stats from the glm result and calculate af in dataset and panel
         grep -E "TEST|ADD" ${base}.PHENO1.glm.logistic.hybrid > temp && mv temp ${base}.PHENO1.glm.logistic.hybrid
+        # run fisher's test without covariates for unconverged variants that are rare in either batch or panel
+        # this will get rid of large frequency differences between batch and panel
+        { grep -Ew "UNFINISHED|FIRTH_CONVERGE_FAIL" ${base}.PHENO1.glm.logistic.hybrid || test $?=1; } | awk '{print $3}' > unconverged_vars
+        echo -e "`wc -l <unconverged_vars` variant(s) did not converge in glm"
+        if [[ $(wc -l <unconverged_vars) -ge 1 ]]; then
+            $plink_cmd --bfile merged --extract unconverged_vars --pheno pheno --assoc fisher --out ${base}
+        else
+            # an empty file is not good later on in panel_comparison awk spell
+            echo "empty" > ${base}.assoc.fisher
+        fi
+        
+        echo -e "`date`\tcompute frequencies"
         $plink2_cmd --bfile gt_panel_isec --freq --out ${base}
         $plink2_cmd --bfile panel_gt_isec --freq --out ${base}_panel_freq
         awk 'BEGIN{OFS="\t"} NR==1{print "CHR","SNP","REF","ALT","AF"} NR>1{print "chr"$1,$2,$3,$4,$5}' ${base}.afreq > ${base}.frq
@@ -377,6 +388,7 @@ task glm_vs_panel {
         File dataset_freq_panel_intersect = base + ".frq"
         File panel_freq_dataset_intersect = base + "_panel_freq.frq"
         File eigenvec = base + ".eigenvec"
+        File fisher = base + ".assoc.fisher"
     }
 
     runtime {
@@ -635,6 +647,7 @@ task panel_comparison {
     File dataset_freq_panel_intersect
     File freq_panel
     Array[File] files_glm
+    Array[File] files_fisher
     File bim
     Float p
     Float? af_panel
@@ -642,10 +655,24 @@ task panel_comparison {
 
     command <<<
 
-        awk 'FNR==NR||FNR>1' ${sep=' ' files_glm} | sed 's/#CHR/CHR/' > ${base}.glm
+        set -euxo pipefail
 
+        awk 'FNR==NR||FNR>1' ${sep=' ' files_glm} | sed 's/#CHR/CHR/' > glm
+        awk 'FNR==NR||FNR>1' ${sep=' ' files_fisher} > fisher
+
+        # replace p-values in the glm file with fisher's results when computed
         # set possibly underflowing p-vals to 1e-320 to avoid problems in the following R script
-        awk 'NR==1{for(i=1;i<=NF;i++) h[$i]=i; print $0} NR>1{if($h["P"]<1e-320) $h["P"]=1e-320; print $0}' ${base}.glm > temp && mv temp ${base}.glm
+        awk '
+        BEGIN          {OFS="\t"}
+        FNR==1         {for(i=1;i<=NF;i++) h[$i]=i}
+        NR==FNR&&NR>1  {p[$h["SNP"]]=$h["P"]}
+        NR>FNR&&FNR==1 {$1=$1; print $0}
+        NR>FNR&&FNR>1  {$1=$1; if($h["ID"] in p) $h["P"]=p[$h["ID"]]; print $0}
+        ' fisher glm | awk '
+        BEGIN {OFS="\t"}
+        NR==1 {for(i=1;i<=NF;i++) h[$i]=i; print $0}
+        NR>1  {if(($h["P"]+0)<1e-320) $h["P"]=1e-320; print $0}
+        ' > ${base}.glm
 
         # plot_AF_comparison.R from factory
         Rscript - <<EOF
@@ -1459,8 +1486,8 @@ task merge_batches {
 
     runtime {
         docker: "${docker}"
-        memory: "10 GB"
-        cpu: 2
+        memory: length(beds) + " GB"
+        cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
         zones: "europe-west1-b europe-west1-c europe-west1-d"
@@ -1481,10 +1508,10 @@ task merge_chip_data {
             plink2 --vcf $file --make-bed --out `basename $file .gz`
         done
         ls -1 *.bed | xargs -I{} basename {} .bed > mergelist
-        plink --allow-extra-chr --keep-allele-order --memory $mem --merge-list mergelist --make-bed --out ${name}_chip_allchr
-        plink2 --allow-extra-chr --freq --bfile ${name}_chip_allchr --out ${name}_chip_allchr
-        # PLINK2 creates VCF 4.3 without --export that some tools don't accept so use PLINK 1.9 to create VCF 4.2 with Y/MT coded as homozygous diploid
-        plink --keep-allele-order --allow-extra-chr --bfile ${name}_chip_allchr --memory $mem --recode vcf-iid bgz --output-chr chrM --out ${name}_chip_allchr
+        plink --allow-extra-chr --memory $mem --keep-allele-order --merge-list mergelist --make-bed --out ${name}_chip_allchr
+        plink2 --allow-extra-chr --memory $mem --freq --bfile ${name}_chip_allchr --recode vcf-4.2 bgz --out ${name}_chip_allchr
+        bcftools +fill-tags ${name}_chip_allchr.vcf.gz -Oz -o ${name}_chip_allchr.vcf.gz.new -- -t AF,AC,AN,AC_Hom,AC_Het
+        mv ${name}_chip_allchr.vcf.gz.new ${name}_chip_allchr.vcf.gz
         tabix -p vcf ${name}_chip_allchr.vcf.gz
     >>>
 
@@ -1499,7 +1526,7 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: "30 GB"
+        memory: 3*length(vcfs) + " GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
