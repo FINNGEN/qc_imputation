@@ -161,9 +161,10 @@ workflow qc_imputation {
     }
     
     # merge chip data across chromosomes
-    #call merge_chip_data {
-    #    input: name=name, vcfs=subset_samples_chip.subset_vcfs, docker=docker
-    #}
+    call merge_chip_data {
+        # subset_samples_chip.subset_vcfs is in fact one-dimensional because it was run over merged batches
+        input: name=name, vcfs=flatten(subset_samples_chip.subset_vcfs), docker=docker
+    }
     
     if (run_imputation) {
         # run imputation per chromosome
@@ -1497,22 +1498,28 @@ task merge_batches {
 task merge_chip_data {
     
     String name
-    Array[Array[File]] vcfs
-    Array[File] vcfs_flat = flatten(vcfs)
+    Array[File] vcfs
     String docker
 
+    # this is quite slow just concatenating vcfs
+    # e.g. plink1.9 merge would be preferred but it would require
+    # too much memory due to long allele ids
     command <<<
+    
         set -euxo pipefail
+        
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
-        for file in ${sep=" " vcfs_flat}; do
-            plink2 --vcf $file --make-bed --out `basename $file .gz`
-        done
-        ls -1 *.bed | xargs -I{} basename {} .bed > mergelist
-        plink --allow-extra-chr --memory $mem --keep-allele-order --merge-list mergelist --make-bed --out ${name}_chip_allchr
-        plink2 --allow-extra-chr --memory $mem --freq --bfile ${name}_chip_allchr --recode vcf-4.2 bgz --out ${name}_chip_allchr
-        bcftools +fill-tags ${name}_chip_allchr.vcf.gz -Oz -o ${name}_chip_allchr.vcf.gz.new -- -t AF,AC,AN,AC_Hom,AC_Het
-        mv ${name}_chip_allchr.vcf.gz.new ${name}_chip_allchr.vcf.gz
+
+        # concatenate per-chr vcfs
+        for file in ${sep=" " vcfs}; do mv $file .; done
+        cat \
+        <(zcat ${vcfs[0]} | grep -E "^#") \
+        <(while read line; do zcat $line | grep -Ev "^#"; done < <(ls *.vcf.gz | sort -V)) \
+        | bgzip -@4 > temp && mv temp ${name}_chip_allchr.vcf.gz # rename due to above while loop otherwise including the file we are creating
         tabix -p vcf ${name}_chip_allchr.vcf.gz
+        
+        # convert to plink
+        plink2 --memory ${mem} --vcf ${name}_chip_allchr.vcf.gz --freq --make-bed --out ${name}_chip_allchr
     >>>
 
     output {
@@ -1526,7 +1533,7 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: 3*length(vcfs) + " GB"
+        memory: "10 GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
