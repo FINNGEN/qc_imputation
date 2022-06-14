@@ -4,7 +4,7 @@ workflow imputation {
     Array[String] beds
     Array[String] batch_qc_exclude_variants
     Array[String] panel_exclude_variants
-    String force_impute_variants
+    Map[Int, String] force_impute_variants
     String exclude_samples
     Map[Int, String] ref_panel
     String docker
@@ -17,7 +17,7 @@ workflow imputation {
             batch_qc_exclude_variants=batch_qc_exclude_variants[i],
             panel_exclude_variants=panel_exclude_variants[i],
             exclude_samples=exclude_samples,
-            force_impute_variants=force_impute_variants,
+            force_impute_variants=force_impute_variants[chr],
             docker=docker
         }
         call phase_impute {

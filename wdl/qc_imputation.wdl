@@ -6,6 +6,7 @@ workflow qc_imputation {
 
     String name
     Boolean run_imputation
+    Boolean merge_imputed_batches
     File vcf_loc
     Array[String] vcfs = read_lines(vcf_loc)
     File fam_loc
@@ -185,12 +186,12 @@ workflow qc_imputation {
                 docker=docker
             }
         }
-        if ( length(vcfs)>1 ) {
+        if ( length(vcfs)>1 && merge_imputed_batches ) {
             scatter (i in range(length(imputation_chrs))) {
                 call merge_sub.merge_in_chunks {
                      input: vcfs=subset_samples.subset_vcfs[i],
-		     outfile=name+"_all_chr"+imputation_chrs[i]+".vcf.gz",
-                     docker=docker, chunksize=20000
+                     outfile=name+"_all_chr"+imputation_chrs[i]+".vcf.gz",
+                     chunksize=20000
                 }
             }
         }
@@ -1514,13 +1515,13 @@ task merge_chip_data {
         # concatenate per-chr vcfs
         for file in ${sep=" " vcfs}; do mv $file .; done
         cat \
-        <(zcat ${vcfs[0]} | grep -E "^#") \
+        <(zcat `ls *.vcf.gz | head -1` | grep -E "^#") \
         <(while read line; do zcat $line | grep -Ev "^#"; done < <(ls *.vcf.gz | sort -V)) \
         | bgzip -@4 > temp && mv temp ${name}_chip_allchr.vcf.gz # rename due to above while loop otherwise including the file we are creating
         tabix -p vcf ${name}_chip_allchr.vcf.gz
         
         # convert to plink
-        plink2 --memory ${mem} --vcf ${name}_chip_allchr.vcf.gz --freq --make-bed --out ${name}_chip_allchr
+        plink2 --memory $mem --vcf ${name}_chip_allchr.vcf.gz --freq --make-bed --out ${name}_chip_allchr
     >>>
 
     output {

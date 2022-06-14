@@ -21,7 +21,7 @@ workflow merge_in_chunks{
     }
 
     call concatenate_chunks {
-        input: chunks = merge.out, filename = outfile
+        input: chunks = merge.out, docker = docker, filename = outfile
     }
     output {
         File out = concatenate_chunks.out
