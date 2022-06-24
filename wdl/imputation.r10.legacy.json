@@ -1,10 +1,11 @@
 {
   "qc_imputation.docker": "eu.gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0",
   "qc_imputation.imputation.docker": "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2",
-  "qc_imputation.merge_in_chunks.docker": "eu.gcr.io/finngen-refinery-dev/vcf-fusion:a06d794",
+  "qc_imputation.merge_in_chunks.docker": "eu.gcr.io/finngen-refinery-dev/vcf-fusion:a9b934d",
   "qc_imputation.name": "r10_legacy",
-  "qc_imputation.run_imputation": true,
-  "qc_imputation.merge_imputed_batches": true,
+  "qc_imputation.create_chip_dataset": false,
+  "qc_imputation.run_imputation": false,
+  "qc_imputation.merge_imputed_batches": false,
   "qc_imputation.imputation.force_impute_variants": {
     "1": "gs://r7_data/qc/LGR5_missense_rs200138614.txt",
     "2": "gs://r7_data/qc/LGR5_missense_rs200138614.txt",
@@ -92,6 +93,7 @@
   "qc_imputation.genome_build": 38,
   "qc_imputation.panel_comparison.p": 5e-8,
   "qc_imputation.panel_comparison.af_panel": 0.001,
+  "qc_imputation.gather_panel_comparison.glm_panel_n_batches_prop": 0.04,
   "qc_imputation.high_ld_regions": "gs://finngen-imputation-panel/high-LD-regions-b38-merged.plink.txt",
   "qc_imputation.panel_bed": "gs://finngen-imputation-panel/sisu4.2/plink/sisu4.2.bed",
   "qc_imputation.glm_vs_panel.pca_ld": "100 5 0.1",

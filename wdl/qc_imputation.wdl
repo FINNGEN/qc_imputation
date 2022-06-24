@@ -5,12 +5,15 @@ import "merge_chunks.wdl" as  merge_sub
 workflow qc_imputation {
 
     String name
+    Boolean create_chip_dataset
     Boolean run_imputation
     Boolean merge_imputed_batches
     File vcf_loc
     Array[String] vcfs = read_lines(vcf_loc)
-    File fam_loc
-    Array[String] fams_sexcheck = read_lines(fam_loc)
+    File? fam_loc
+    if (defined(fam_loc)) {
+        Array[String] fams_sexcheck = read_lines(fam_loc)
+    }
     File exclude_samples_loc
     Array[String] exclude_samples = read_lines(exclude_samples_loc)
     Map[Int, String] ref_panel
@@ -50,7 +53,7 @@ workflow qc_imputation {
         }
     }
 
-    # run snpstats per chromosome
+    # run snpstats across batches per chromosome
     scatter (chr in chrs) {
         call snpstats {
             input: beds=vcf_to_bed.out_bed, bims=vcf_to_bed.out_bim, fams=vcf_to_bed.out_fam,
@@ -59,6 +62,7 @@ workflow qc_imputation {
     }
 
     # gather snpstats and create a list of variants to be excluded from all batches
+    # because of e.g. hwe of missingness across batches
     call gather_snpstats_joint_qc {
         input: name=name, snpstats=snpstats.snpstats,
         exclude_variants_batch_nonpass=vcf_to_bed.exclude_variants,
@@ -66,31 +70,47 @@ workflow qc_imputation {
         docker=docker
     }
 
-    # run qc per batch across all chromosomes
     scatter (i in range(length(vcfs))) {
         String base_batch = sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", "")
-        # get variants to exclude based on panel comparison and create plot
+        # get variants to exclude from each batch based on panel comparison and create plot
         call panel_comparison {
             input: base=base_batch,
             dataset_freq_panel_intersect=glm_vs_panel.dataset_freq_panel_intersect[i],
             freq_panel=sub(panel_bed, ".bed$", ".afreq"), files_glm=[glm_vs_panel.glm[i]],
             files_fisher=[glm_vs_panel.fisher[i]], bim=vcf_to_bed.out_bim[i], docker=docker
         }
+    }
+    # gather panel comparison stats and create a list of variants to be excluded from all batches
+    # because they fail panel comparison in too many batches
+    call gather_panel_comparison {
+        input: exclude_variants_panel_comparison=panel_comparison.exclude_variants, docker=docker
+    }
+    scatter (i in range(length(vcfs))) {
+        # if no sex check file is given, create one imputing it from the data
+        if (!defined(fams_sexcheck)) {
+            call impute_sex {
+                input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]],
+                bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
+                f=f, genome_build=genome_build, docker=docker
+            }
+        }
         # run batch-wise qc
         call batch_qc {
-            input: base=base_batch, beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]],
-            fams=[vcf_to_bed.out_fam[i]], fam_sexcheck=fams_sexcheck[i],
+            input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]],
+            fams=[vcf_to_bed.out_fam[i]],
+            fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
             exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
-            exclude_variants_panel_comparison=panel_comparison.exclude_variants,
+            exclude_variants_panel_comparison=panel_comparison.exclude_variants[i],
+            exclude_variants_panel_comparison_joint=gather_panel_comparison.exclude_variants,
             genome_build=genome_build, exclude_samples=exclude_samples[i],
             f=f, include_regex=include_regex, high_ld_regions=high_ld_regions,
             docker=docker
         }
     }
 
-    # collect variant exclusions of each batch
+    # collect variant exclusions of each batch to one file
     call gather_variant_exclusions {
        input: name=name, excl_files=batch_qc.variants_exclude, docker=docker
     }
@@ -140,32 +160,35 @@ workflow qc_imputation {
         docker=docker
     }
 
-    # for chip qc, filter variants and samples in batches as per qc and merge batches
-    scatter (i in range(length(vcfs))) {
-        call filter_batch {
-            input: docker=docker, bed=vcf_to_bed.out_bed[i],
-            batch_qc_exclude_variants=batch_qc.variants_exclude[i],
-            exclude_samples=duplicates.allbatches_samples_exclude
+    if (create_chip_dataset) {
+        # for chip qc, filter variants and samples in batches as per qc and merge batches
+        scatter (i in range(length(vcfs))) {
+            call filter_batch {
+                input: docker=docker, bed=vcf_to_bed.out_bed[i],
+                batch_qc_exclude_variants=batch_qc.variants_exclude[i],
+                exclude_samples=duplicates.allbatches_samples_exclude
+            }
         }
-    }
-    scatter (chr in chrs) {
-        call merge_batches {
-            input: docker=docker, name=name+"_chr"+chr, chr=chr,
-            beds=filter_batch.out_bed, bims=filter_batch.out_bim, fams=filter_batch.out_fam
+        scatter (chr in chrs) {
+            # merge chip data of batches per chr
+            call merge_batches {
+                input: docker=docker, name=name+"_chr"+chr, chr=chr,
+                beds=filter_batch.out_bed, bims=filter_batch.out_bim, fams=filter_batch.out_fam
+            }
+            # exclude duplicates (same sample with two different ids) and denials
+            call post_subset_sub.subset_samples as subset_samples_chip {
+                input: vcfs=[merge_batches.vcf], vcf_idxs=[merge_batches.vcf_idx],
+                already_excluded_samples=duplicates.allbatches_samples_exclude,
+                exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
+                sample_summaries=joint_plots.sample_summaries,
+                docker=docker
+            }
         }
-        call post_subset_sub.subset_samples as subset_samples_chip {
-            input: vcfs=[merge_batches.vcf], vcf_idxs=[merge_batches.vcf_idx],
-            already_excluded_samples=duplicates.allbatches_samples_exclude,
-            exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
-            sample_summaries=joint_plots.sample_summaries,
-            docker=docker
+        # merge chip data across chromosomes
+        call merge_chip_data {
+            # subset_samples_chip.subset_vcfs is in fact one-dimensional because it was run over merged batches
+            input: name=name, vcfs=flatten(subset_samples_chip.subset_vcfs), docker=docker
         }
-    }
-    
-    # merge chip data across chromosomes
-    call merge_chip_data {
-        # subset_samples_chip.subset_vcfs is in fact one-dimensional because it was run over merged batches
-        input: name=name, vcfs=flatten(subset_samples_chip.subset_vcfs), docker=docker
     }
     
     if (run_imputation) {
@@ -178,6 +201,7 @@ workflow qc_imputation {
                 exclude_samples=duplicates.allbatches_samples_exclude,
                 ref_panel=ref_panel
             }
+            # exclude duplicates (same sample with two different ids) and denials
             call post_subset_sub.subset_samples as subset_samples {
                 input: vcfs=imputation.vcfs, vcf_idxs=imputation.vcf_idxs,
                 already_excluded_samples=duplicates.allbatches_samples_exclude,
@@ -186,6 +210,7 @@ workflow qc_imputation {
                 docker=docker
             }
         }
+        # paste imputed batches per chr
         if ( length(vcfs)>1 && merge_imputed_batches ) {
             scatter (i in range(length(imputation_chrs))) {
                 call merge_sub.merge_in_chunks {
@@ -791,6 +816,90 @@ task panel_comparison {
     }
 }
 
+task gather_panel_comparison {
+    
+    Array[File] exclude_variants_panel_comparison
+    Float glm_panel_n_batches_prop
+    Int n_batches=length(exclude_variants_panel_comparison)
+    String docker
+    
+    command <<<
+    
+        cat ${sep=" " exclude_variants_panel_comparison} | \
+        datamash -s groupby 1 count 2 > exclude_variants_panel_comparison_batch_counts
+        
+        awk '
+        BEGIN{OFS="\t"}
+        $2>=${glm_panel_n_batches_prop}*${n_batches} {
+            print $1,"glm_panel_joint",$2
+        }' exclude_variants_panel_comparison_batch_counts \
+        > exclude_variants_panel_comparison_joint
+
+    >>> 
+    
+    output {
+        File batch_counts = "exclude_variants_panel_comparison_batch_counts"
+        File exclude_variants = "exclude_variants_panel_comparison_joint"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "3 GB"
+        cpu: 1
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
+task impute_sex {
+    
+    String base
+    Array[File] beds
+    Array[File] bims
+    Array[File] fams
+    Array[Float] f
+    Int genome_build
+    String docker
+    String dollar = "$"
+    
+    command <<<
+    
+        set -euxo pipefail
+        mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
+        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
+
+        # move plink file(s) to current directory, rename to avoid filename clash with ${base} later if there was only one file with the same name
+        for file in ${sep=" " beds}; do
+            mv $file `basename $file .bed`.orig.bed
+            mv ${dollar}{file/\.bed/\.bim} `basename $file .bed`.orig.bim
+            mv ${dollar}{file/\.bed/\.fam} `basename $file .bed`.orig.fam
+        done
+
+        echo "merge chrs (or if all chrs are in one this works anyway)"
+        echo -e "`date`\tmerge"
+        ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
+        $plink_cmd --merge-list mergelist.txt --make-bed --out ${base}
+        
+        $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out ${base}
+        $plink_cmd --bfile ${base} --impute-sex ${sep=" " f} --make-bed --out ${base}
+        
+    >>>
+    
+    output {
+        File fam = base + ".fam"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "3 GB"
+        cpu: 1
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
 task batch_qc {
 
     String base
@@ -802,6 +911,7 @@ task batch_qc {
     File exclude_variants_nonpass_nonstdalt
     Array[File] exclude_variants_joint
     File exclude_variants_panel_comparison
+    File exclude_variants_panel_comparison_joint
     File exclude_samples
     String include_regex
     File fam_sexcheck
@@ -829,7 +939,10 @@ task batch_qc {
 
         echo "get variants to exclude based on joint qc and panel comparison"
         for file in ${sep=" " exclude_variants_joint}; do cat $file >> upfront_exclude_variants.txt; done
+        cat ${exclude_variants_panel_comparison_joint} >> upfront_exclude_variants.txt
         cat ${exclude_variants_panel_comparison} >> upfront_exclude_variants.txt
+        # non_pass_nonstdalt have already been excluded from the data but list here for logging completeness
+        cat ${exclude_variants_nonpass_nonstdalt} >> upfront_exclude_variants.txt
 
         echo "moving the plink files"
         # move plink file(s) to current directory, rename to avoid filename clash with ${base} later if there was only one file with the same name
@@ -841,8 +954,6 @@ task batch_qc {
         echo "done moving the files"
 
         # get samples in data to exclude by given list not counting the same sample more than once
-        # TODO using sex check fam here because samples may have been excluded earlier and we want to list all excluded samples here
-
         ## grep returns code 1 so if no matches (e.g. no exclusions) and pipefail
         ## stops the execution silently! below test handles that
         awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} \
@@ -959,12 +1070,11 @@ task batch_qc {
         echo "get included samples"
         comm -23 <(cut -f2 ${base}.fam | sort) <(cut -f1 ${base}.samples_exclude.txt | sort) > ${base}.samples_include.txt
 
-        echo "add variants from panel and comparison and joint qc to exclusion"
+        echo "add variants from panel comparison and joint qc to exclusion"
         ## adding variants only once per batch
-        for file in ${sep=" " exclude_variants_joint}; do cat $file >> joint_variant_exclusions; done
         awk 'BEGIN{OFS="\t"} NR==FNR{ exists[$1]=1 }  \
             NR>FNR&&($1 in exists)&&(!dups[$1]++){ print $1,$2,$3 } ' \
-        ${all_batch_variants} joint_variant_exclusions ${exclude_variants_panel_comparison} ${exclude_variants_nonpass_nonstdalt} \
+        ${all_batch_variants} upfront_exclude_variants.txt \
         >> ${base}.exclude_variants_batch_qc.txt
 
         ## create frq per batch to get original variants in a batch and their AF
@@ -1470,26 +1580,27 @@ task merge_batches {
 
         echo "`date`\tmerge"
         cat ${write_lines(beds)} | sed 's/.bed//g' > merge_list.txt
-        plink --allow-extra-chr --keep-allele-order --merge-list merge_list.txt --chr ${chr} --memory $mem --make-bed --out plink_merged
+        plink --allow-extra-chr --keep-allele-order --merge-list merge_list.txt --chr ${chr} --memory $mem --make-bed --out ${name}
         echo "`date`\tplink to vcf"
-        plink2 --allow-extra-chr --bfile plink_merged --memory $mem --recode vcf-iid bgz --output-chr chrM --out plink_merged
-
-        # index and add info tags
-        echo "`date`\ttags"
-        bcftools +fill-tags plink_merged.vcf.gz -Oz -o ${name}.vcf.gz -- -t NS,AF,AC_Hom,AC_Het
-        echo "`date`\tindex vcf"
-        bcftools index -t -f ${name}.vcf.gz
+        plink2 --allow-extra-chr --bfile ${name} --memory $mem --freq --recode vcf-iid bgz --output-chr chrM --out ${name}
+        echo "`date`\ttabix"
+        tabix -p vcf ${name}.vcf.gz
+        echo "`date`\tdone"
 
     >>>
 
     output {
+        File bed = name + ".bed"
+        File bim = name + ".bim"
+        File fam = name + ".fam"
+        File afreq = name + ".afreq"
         File vcf = name + ".vcf.gz"
         File vcf_idx = name + ".vcf.gz.tbi"
     }
 
     runtime {
         docker: "${docker}"
-        memory: length(beds) + " GB"
+        memory: ceil(length(beds)/3) + " GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
@@ -1504,7 +1615,7 @@ task merge_chip_data {
     String docker
 
     # this is quite slow just concatenating vcfs
-    # e.g. plink1.9 merge would be preferred but it would require
+    # e.g. plink1.9 merge would be preferred but it can require
     # too much memory due to long allele ids
     command <<<
     
@@ -1535,9 +1646,9 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: "10 GB"
-        cpu: 1
-        disks: "local-disk 200 HDD"
+        memory: length(vcfs) + " GB"
+        cpu: 4
+        disks: "local-disk 200 SSD"
         preemptible: 2
         zones: "europe-west1-b europe-west1-c europe-west1-d"
     }

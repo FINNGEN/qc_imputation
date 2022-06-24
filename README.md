@@ -134,7 +134,7 @@ QC/imputation pipeline qc_imputation.wdl inputs
     "qc_imputation.snpstats.run_joint_qc": true/false, whether to run joint qc across all batches or not
     "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
     "qc_imputation.vcf_loc": location of genotype data VCF files to run
-    "qc_imputation.fam_loc": location of genotype data FAM files to run
+    "qc_imputation.fam_loc": [OPTIONAL] location of genotype data FAM files corresponding to the VCF files - used for sex check if given
     "qc_imputation.exclude_samples_loc": location of samples to exclude from the run
     "qc_imputation.duplicate_samples": location of tab-delimited list of duplicate ids (same individual genotyped many times)
     "qc_imputation.exclude_denials": location of denial list

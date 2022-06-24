@@ -123,13 +123,19 @@ task subset {
         if [[ $n_remove -eq 0 ]]
         then
             echo "Subset samples file not specified and no duplicates to remove. Not subsetting."
-            mv ${vcf} ${bn}"_subset.vcf.gz"
-            mv ${vcf_idx} ${bn}"_subset.vcf.gz.tbi"
+            mv ${vcf} ${bn}_temp.vcf.gz
         else
             echo "Subsetting "$n_remove" samples"
-            bcftools view -S ^removals --force-samples ${vcf} -Ov | bgzip > ${bn}"_subset.vcf.gz"
-            tabix -p vcf ${bn}"_subset.vcf.gz"
+            bcftools view -S ^removals --force-samples ${vcf} -Ov | bgzip > ${bn}_temp.vcf.gz
         fi
+
+        # index and add info tags
+        echo "`date`\ttags"
+        bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        echo "`date`\tindex vcf"
+        tabix -p vcf ${bn}"_subset.vcf.gz"
+        echo "`date`\tdone"
+        
     >>>
 
 
