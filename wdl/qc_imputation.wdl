@@ -1600,7 +1600,7 @@ task merge_batches {
 
     runtime {
         docker: "${docker}"
-        memory: ceil(length(beds)/3) + " GB"
+        memory: ceil(length(beds)/2) + " GB"
         cpu: 1
         disks: "local-disk 200 HDD"
         preemptible: 2
@@ -1646,7 +1646,7 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: length(vcfs) + " GB"
+        memory: 2*length(vcfs) + " GB"
         cpu: 4
         disks: "local-disk 200 SSD"
         preemptible: 2
