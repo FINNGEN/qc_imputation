@@ -128,9 +128,12 @@ QC/imputation pipeline qc_imputation.wdl inputs
 ```
     "qc_imputation.docker" docker image to use in QC tasks
     "qc_imputation.imputation.docker" docker image to use in imputation tasks
+    "qc_imputation.merge_in_chunks.docker": docker image to use in imputed data merging
     "qc_imputation.name": name of the run, e.g. r10_affy
+    "qc_imputation.create_chip_dataset": true/false, whether to create a chip dataset across batches and chromosomes
     "qc_imputation.run_imputation": true/false, whether to run also imputation or only QC - best to first set this to false and check that the QC is fine before running imputation
-    "qc_imputation.imputation.force_impute_variants": location of a list of variants to force imputation of even if they otherwise pass QC (can be an empty file),
+    "qc_imputation.merge_imputed_batches": true/false, whether to merge imputed batches (usually not necessary as merging will be later done across all legacy and affy batches)
+    "qc_imputation.imputation.force_impute_variants": chromosome-to-variant_list_location dictionary, per-chr lists of variants to force imputation of even if they otherwise pass QC (can be an empty file)
     "qc_imputation.snpstats.run_joint_qc": true/false, whether to run joint qc across all batches or not
     "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
     "qc_imputation.vcf_loc": location of genotype data VCF files to run
@@ -145,6 +148,7 @@ QC/imputation pipeline qc_imputation.wdl inputs
     "qc_imputation.genome_build": genome build version (38)
     "qc_imputation.panel_comparison.p": p-value threshold to use in excluding variants based on GWAS against panel, e.g. 5e-8
     "qc_imputation.panel_comparison.af_panel": variants with AF smaller than this threshold will not be given to imputation
+    "qc_imputation.gather_panel_comparison.glm_panel_n_batches_prop": variants failing panel comparison in at least this proportion of batches will be excluded from all batches
     "qc_imputation.high_ld_regions": location of list of high-LD regions of the genome
     "qc_imputation.panel_bed": location of imputation panel PLINK bed file
     "qc_imputation.glm_vs_panel.pca_ld": PLINK LD parameters to use in PCA in comparison against imputation panel
@@ -290,19 +294,3 @@ CromwellInteract.py submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_
 
 Per batch duplicates removed
 Final merged files
-
-## Production runs
-
-**Release 7 runs **
-
-Data was ran in cromwell-fg-1
-
-- Legacy data batches hash 7c9804b0-1850-4c76-8643-c628332db399
-- Affy data a371ed62-cf5c-43ee-b755-8790eb3efe0c
-- Removal of final non-inclusions samples and deduplication across batches combined 8934d7cc-97d1-47fe-8893-c8799943d2ff
-
-List of final non included samples
-
-```
-comm -23 <(gsutil cat gs://thl-incoming-data/from-data-team/R7/fgfactory_pass_samples_R7.txt | awk 'BEGIN{ FS=":";} NR>1{ print $6}' | sort -b) <(gsutil cat gs://r7_data/R7_lists_from_Tero/finngen_R7_finngenid_inclusion_list.txt | sort -b)  > r7_samples_not_in_inclusion
-```
