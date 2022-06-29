@@ -16,6 +16,7 @@ workflow submerge {
     ## per chr output names of merged files
     String basename
     Array[Int] chrs
+    String docker
 
     scatter (chr in range(length(all_batch_per_chrom_shards))) {
         call subset_samples.dedup {
@@ -23,7 +24,7 @@ workflow submerge {
         }
 
         call merge_sub.merge_in_chunks {
-            input: batches=dedup.subvcfs, outfile=basename+"_chr"+chrs[chr]+".vcf.gz",chunksize=20000,docker="gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
+            input: vcfs=dedup.subvcfs, outfile=basename+"_chr"+chrs[chr]+".vcf.gz",chunksize=20000,docker=docker
         }
     }
 

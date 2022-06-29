@@ -59,7 +59,7 @@ task reorder_array{
         cpu: 1
         disks: "local-disk 10 HDD"
         preemptible: 0
-        zones:"europe-west1-b europe-west1-c europe-west1-d"
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 
     output {
@@ -216,8 +216,8 @@ task concatenate_chunks{
 
     runtime {
         docker: docker
-        memory: "8 GB"
-        cpu: 4
+        memory: "3 GB"
+        cpu: 1
         disks: "local-disk 300 SSD"
         preemptible: 0
         zones: "europe-west1-b europe-west1-c europe-west1-d"
