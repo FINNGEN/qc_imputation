@@ -51,6 +51,9 @@ task subset {
 
         cut -f 2 ${already_excluded_samples} | sort | uniq > removals
 
+        # remove _dup suffixes from sample summaries as there are no suffixes in the duplicate list
+        sed -i 's/_dup[0-9]\+//' ${sample_summaries}
+
         if [[ "$excl_denials_file" != "" ]]
         then
             cat $excl_denials_file >> removals
@@ -120,13 +123,19 @@ task subset {
         if [[ $n_remove -eq 0 ]]
         then
             echo "Subset samples file not specified and no duplicates to remove. Not subsetting."
-            mv ${vcf} ${bn}"_subset.vcf.gz"
-            mv ${vcf_idx} ${bn}"_subset.vcf.gz.tbi"
+            mv ${vcf} ${bn}_temp.vcf.gz
         else
             echo "Subsetting "$n_remove" samples"
-            bcftools view -S ^removals --force-samples ${vcf} -Ov | bgzip > ${bn}"_subset.vcf.gz"
-            tabix -p vcf ${bn}"_subset.vcf.gz"
+            bcftools view -S ^removals --force-samples ${vcf} -Ov | bgzip > ${bn}_temp.vcf.gz
         fi
+
+        # index and add info tags
+        echo "`date`\ttags"
+        bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        echo "`date`\tindex vcf"
+        tabix -p vcf ${bn}"_subset.vcf.gz"
+        echo "`date`\tdone"
+        
     >>>
 
 
@@ -138,9 +147,10 @@ task subset {
 
     runtime {
         docker: "${docker}"
-        memory: "7 GB"
         cpu: 1
+        memory: "7 GB"
         disks: "local-disk 200 HDD"
         preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }

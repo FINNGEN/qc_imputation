@@ -5,10 +5,11 @@ workflow dedup {
     String remove_samples
     ## batches by chr order
     Array[String] batch_files
+    String docker
 
     scatter (f in batch_files) {
         call subset {
-            input: vcf=f, removals=remove_samples
+            input: vcf=f, removals=remove_samples, docker=docker
         }
     }
 
@@ -25,6 +26,7 @@ task subset {
     String bn = basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
     File tbi=vcf+".tbi"
     File removals
+    String docker
 
     command <<<
 
@@ -52,10 +54,11 @@ task subset {
     }
 
     runtime {
-        docker: "gcr.io/finngen-refinery-dev/qc_imputation:0.01"
+        docker: docker
         memory: "7 GB"
         cpu: 4
         disks: "local-disk 200 HDD"
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
         preemptible: 2
     }
 

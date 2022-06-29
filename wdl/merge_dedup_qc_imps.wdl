@@ -1,6 +1,7 @@
 ### after separate runs of e.g. legacy and affy and with list of same individual ids
 ## we need to pick single sample to keep across those same individuals
 import "dedup.wdl" as subset_samples
+import "merge_chunks.wdl" as merge_sub
 
 workflow submerge {
 
@@ -15,44 +16,17 @@ workflow submerge {
     ## per chr output names of merged files
     String basename
     Array[Int] chrs
+    String docker
 
     scatter (chr in range(length(all_batch_per_chrom_shards))) {
         call subset_samples.dedup {
             input: batch_files=all_batch_per_chrom_shards[chr], remove_samples=remove_samples
         }
 
-        call merge {
-            input: vcfs=dedup.subvcfs, outfile=basename+"_chr"+chrs[chr]+".vcf.gz"
+        call merge_sub.merge_in_chunks {
+            input: vcfs=dedup.subvcfs, outfile=basename+"_chr"+chrs[chr]+".vcf.gz",chunksize=20000,docker=docker
         }
     }
 
 }
 
-task merge {
-    Array[File] vcfs
-    String outfile
-    Int cpus = 32
-
-    command <<<
-        set -euxo pipefail
-        echo "Execute vcf-fusion&paste&bgzip command"
-        time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
-        tabix -p vcf ${outfile}
-    >>>
-
-    output {
-        File out = outfile
-        File idx = outfile + ".tbi"
-    }
-
-    runtime {
-        docker: "gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0"
-        memory: "12 GB"
-        cpu: cpus
-        disks: "local-disk 600 HDD"
-        preemptible: 0
-    }
-
-
-
-}
