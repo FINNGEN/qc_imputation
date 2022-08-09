@@ -7,6 +7,7 @@ import io
 import subprocess
 import shlex
 import argparse
+import re
 
 cromwell_ip="0.0.0.0"
 
@@ -81,6 +82,8 @@ def get_sumstats(sumstatpaths:List[str]):
             if d["IID"] in sumdat:
                 print("Warning same ID in multiple times in summary files!" + d["IID"] +
                     "Old pipeline had all samples across all batches but modified to add only finally included samples")
+            # remove possible _dupX suffix as duplicate lists will not contain those
+            d["IID"] = re.sub(r'_dup[0-9]+', "", d["IID"])
             sumdat[d["IID"]] = d
     return sumdat
 
