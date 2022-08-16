@@ -167,7 +167,7 @@ task post_imputation {
 
         # add info tags
         bcftools index -t -f ${vcf}
-        bcftools +fill-tags ${vcf} -Ou -- -t AF,AC_Hom,AC_Het,HWE | \
+        bcftools +fill-tags ${vcf} -Ou -- -t AF,AC_Hom,AC_Het,NS,HWE | \
         bcftools +impute-info -Oz -o ${base}_imputed_infotags.vcf.gz
 
         # create info/af plots
@@ -180,7 +180,7 @@ task post_imputation {
         # annotate, edit tags and index
         [[ ${base} =~ (.*)_qcd_imputed ]]
         batch=${dollar}{BASH_REMATCH[1]}
-        edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch AR2: DR2: IMP:"
+        edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch NS:NS_$batch AR2: DR2: IMP:"
         time bcftools index -t -f ${base}_imputed_infotags.vcf.gz
 		time bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
 		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Ov | \

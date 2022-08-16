@@ -218,7 +218,7 @@ task concatenate_chunks{
         docker: docker
         memory: "3 GB"
         cpu: 1
-        disks: "local-disk 300 SSD"
+        disks: "local-disk 600 SSD"
         preemptible: 0
         zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
