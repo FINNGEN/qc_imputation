@@ -4,7 +4,7 @@ Genotype QC and imputation pipeline
 
 Takes a list of VCF files and input parameters and performs variant and sample wise QC for both chip QC and imputation purposes
 
-## QC steps
+## QC steps ([wdl/qc_imputation.wdl](wdl/qc_imputation.wdl))
 
 1. `vcf_to_bed`: Convert each VCF file to PLINK bed
 
