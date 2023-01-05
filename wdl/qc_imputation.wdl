@@ -96,8 +96,8 @@ workflow qc_imputation {
         }
         # run batch-wise qc
         call batch_qc {
-            input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]],
-            fams=[vcf_to_bed.out_fam[i]],
+            input: base=base_batch[i],
+	    beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
             fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
@@ -794,7 +794,7 @@ task panel_comparison {
         # exclude variants not in panel or AF below threshold in panel for imputation qc
         comm -23 <(cut -f2 ${bim} | sort) <(cut -f2 ${freq_panel} | sort) | \
         awk 'BEGIN{OFS="\t"} {print $1,"not_in_panel","NA"}' > ${base}.exclude_variants_panel_comparison_for_imputation.txt
-        awk 'BEGIN{OFS="\t"} NR>1&&$5<${af_panel} {print $2,"af_panel",$5}' ${freq_panel} >> ${base}.exclude_variants_panel_comparison_for_imputation.txt
+        awk 'BEGIN{OFS="\t"} NR==FNR {a[$2]} NR>FNR && FNR>1 && $5<${af_panel} && $2 in a {print $2,"af_panel",$5}' ${bim} ${freq_panel} >> ${base}.exclude_variants_panel_comparison_for_imputation.txt
 
     >>>
 
@@ -917,6 +917,7 @@ task batch_qc {
     File fam_sexcheck
     Boolean check_ssn_sex
     File ssn_sex
+    File ignore_sexcheck_samples
     File high_ld_regions
     Float hw
     Float variant_missing
@@ -968,11 +969,11 @@ task batch_qc {
         echo "get initial missingness for all remaining samples"
         $plink_cmd --bfile ${base} --missing --out missing
         cp missing.imiss ${base}.raw.imiss
+
         echo "check that given sex check fam file matches data"
         echo -e "`date`\tsex_check"
         join -t $'\t' -1 3 -2 2 <(awk '{OFS="\t"; $1=$1; print $0}' ${base}.fam | nl -nln | sort -k3,3) <(awk '{OFS="\t"; $1=$1; print $0}' ${fam_sexcheck} | sort -k2,2 ) | \
         sort -b -k2,2g | awk '{OFS="\t"; print $8,$1,$9,$10,$11,$12}' > sexcheck.fam
-
         if [[ `diff <(awk '{print $2}' sexcheck.fam) <(awk '{print $2}' ${base}.fam) | wc -l | awk '{print $1}'` != 0 ]]; then
             >2& echo "samples differ between ${fam_sexcheck} and ${base}.fam"
             exit 1
@@ -980,7 +981,7 @@ task batch_qc {
 
         echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
-        $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out plink_data
+        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --split-x b${genome_build} no-fail --make-bed --out plink_data
         $plink_cmd --bfile plink_data --check-sex ${sep=" " f} --out plink_data
         awk 'BEGIN{OFS="\t"} NR>1&&$5!="OK" {print $2,"sex_check",$6}' plink_data.sexcheck >> ${base}.samples_exclude.txt
         cp plink_data.sexcheck ${base}.sexcheck
