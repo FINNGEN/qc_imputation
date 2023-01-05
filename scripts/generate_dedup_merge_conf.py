@@ -33,6 +33,13 @@ def get_qc_import_outfiles(hash):
     per_chr_vcfs = res_json["outputs"]["qc_imputation.subset_samples.subset_vcfs"]
     return(sample_summary_file, per_chr_vcfs)
 
+def get_qc_import_outfiles_from_locfile(loc):
+    print(f'Reading sample summary and vcf locations from {loc}')
+    with open(loc, 'r') as f:
+        sample_summary_file = f.readline().strip()
+        per_chr_vcfs = [line.strip().split('\t') for line in f.readlines()]
+    return(sample_summary_file, per_chr_vcfs)
+    
 def dups_to_remove( sumstats, dupfile):
     ind_dat={}
     removals = []
@@ -90,12 +97,12 @@ def get_sumstats(sumstatpaths:List[str]):
 
 def run():
     parser = argparse.ArgumentParser(description="Generate conf for deduplicating and merging multiple qc-imputation runs")
-    parser.add_argument('hashes', type=str, help='Comma separated list of cromwell hashes')
+    parser.add_argument('hashes_or_locfiles', type=str, help='Comma separated list of cromwell hashes or output location files')
     parser.add_argument('dup_file',  type=str, help='File with duplicate ID samples, multiple IDs of one individual on one line separated b ytabs')
     parser.add_argument('outprefix',  type=str, help='output prefix')
     args = parser.parse_args()
 
-    jobs = args.hashes.split(",")
+    jobs = args.hashes_or_locfiles.split(",")
 
     if len(jobs)<=1:
         print("No point in running single jobs depup merge")
@@ -103,7 +110,10 @@ def run():
 
     jdats=[]
     for j in jobs:
-        jdats.append(get_qc_import_outfiles(j))
+        if len(j.split('-'))==5:
+            jdats.append(get_qc_import_outfiles(j))
+        else:
+            jdats.append(get_qc_import_outfiles_from_locfile(j))
 
     sumstats = get_sumstats([ jdat[0] for jdat in jdats])
 
@@ -111,7 +121,7 @@ def run():
 
     per_chr_files = args.outprefix + "_all_batches_per_chr"
 
-    remove_file = args.outprefix + "_final_sample_removals"
+    remove_file = args.outprefix + "_dedup_sample_removals"
 
     with open(remove_file,"w") as rf:
         for id in remove_id_list:
@@ -131,7 +141,7 @@ def run():
             batches.write("\t".join(chr_batches) + "\n")
 
     print("Ok now run wdl/merge_dedup_qc_imps.wdl with wdl/dedup.wdl dependency." +
-            f"Copy these ({per_chr_files}, {remove_file}) files to Google bucket and point wd/merge_dedup_qc_imps.json to them." )
+            f"Copy these ({per_chr_files}, {remove_file}) files to Google bucket and point wdl/merge_dedup_qc_imps.json to them." )
 
     ## zip -j wdl/merge_dedup_qc_imps_deps.zip wdl/dedup.wdl
     ## 
