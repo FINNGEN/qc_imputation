@@ -921,6 +921,7 @@ task batch_qc {
     File high_ld_regions
     Float hw
     Float variant_missing
+    Float variant_missing_y
     Float sample_missing
     Array[Float] f
     Float het_sd
@@ -1033,8 +1034,11 @@ task batch_qc {
         echo "remove variants by missingness once more after removing samples by missingness"
         echo -e "`date`\tmissingness"
 
-        awk 'BEGIN{OFS="\t"} NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("F_MISS" in h)) { print "F_MISS column not in .vmiss file" >> "/dev/stderr"; exit 1 } } \
-            NR>1 && $h["F_MISS"]!="nan" && $h["F_MISS"]>${variant_missing} {print $2,"missing_proportion",$h["F_MISS"]}' plink_data.vmiss >> ${base}.exclude_variants_batch_qc.txt
+        awk 'BEGIN{OFS="\t"}
+	     NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("F_MISS" in h)) { print "F_MISS column not in .vmiss file" >> "/dev/stderr"; exit 1 } }
+             NR>1 && $h["F_MISS"]!="nan" && (($1!="Y" && $h["F_MISS"]>${variant_missing}) || ($1=="Y" && $h["F_MISS"]>${variant_missing_y})) {
+	      print $2,"missing_proportion",$h["F_MISS"]
+	     }' plink_data.vmiss >> ${base}.exclude_variants_batch_qc.txt
         cp plink_data.vmiss ${base}.vmiss
         # NOTE variant exclusion now done, filter with high AF threshold for the rest of QC
         $plink2_cmd --bfile plink_data --maf 0.05 --exclude <(cut -f1 ${base}.exclude_variants_batch_qc.txt) --make-bed --out plink_data
@@ -1615,30 +1619,21 @@ task merge_chip_data {
     Array[File] vcfs
     String docker
 
-    # this is quite slow just concatenating vcfs
-    # e.g. plink1.9 merge would be preferred but it can require
-    # too much memory due to long allele ids
     command <<<
     
         set -euxo pipefail
         
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
-
-        # concatenate per-chr vcfs
-        for file in ${sep=" " vcfs}; do mv $file .; done
-        cat \
-        <(zcat `ls *.vcf.gz | head -1` | grep -E "^#") \
-        <(while read line; do zcat $line | grep -Ev "^#"; done < <(ls *.vcf.gz | sort -V)) \
-        | bgzip -@4 > temp && mv temp ${name}_chip_allchr.vcf.gz # rename due to above while loop otherwise including the file we are creating
-        tabix -p vcf ${name}_chip_allchr.vcf.gz
-        
-        # convert to plink
-        plink2 --memory $mem --vcf ${name}_chip_allchr.vcf.gz --freq --make-bed --out ${name}_chip_allchr
+	
+	for file in ${sep=" " vcfs}; do
+	    plink2 --memory $mem --vcf $file --make-bed --out `basename $file .gz`
+	done
+	ls -1 *.bed | xargs -I{} basename {} .bed > mergelist
+	plink --keep-allele-order --memory $mem --merge-list mergelist --make-bed --out ${name}_chip_allchr
+	plink2 --freq --bfile ${name}_chip_allchr --out ${name}_chip_allchr
     >>>
 
     output {
-        File vcf = name + "_chip_allchr.vcf.gz"
-        File vcf_idx = name + "_chip_allchr.vcf.gz.tbi"
         File bed = name + "_chip_allchr.bed"
         File bim = name + "_chip_allchr.bim"
         File fam = name + "_chip_allchr.fam"
@@ -1647,41 +1642,10 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: 2*length(vcfs) + " GB"
+        memory: "100 GB"
         cpu: 4
-        disks: "local-disk 200 SSD"
+        disks: "local-disk 500 HDD"
         preemptible: 2
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
-
-task paste {
-
-    Array[File] vcfs
-    String outfile
-    String dollar = "$"
-    String storage="local-disk 300 HDD"
-    Int cpus = 32
-    String docker
-
-    command <<<
-        set -euxo pipefail
-        echo "Execute vcf-fusion&paste&bgzip command"
-        time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
-        tabix -p vcf ${outfile}
-    >>>
-
-    output {
-        File out = outfile
-        File idx = outfile + ".tbi"
-    }
-    
-    runtime {
-        docker: "${docker}"
-        memory: "12 GB"
-        cpu: cpus
-        disks: "local-disk 300 HDD"
-        preemptible: 0
         zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }

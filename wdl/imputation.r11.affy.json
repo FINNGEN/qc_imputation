@@ -3,7 +3,7 @@
   "qc_imputation.imputation.docker": "eu.gcr.io/finngen-refinery-dev/pftools:0.1.2",
   "qc_imputation.merge_in_chunks.docker": "eu.gcr.io/finngen-refinery-dev/vcf-fusion:a9b934d",
   "qc_imputation.name": "r11_axiom",
-  "qc_imputation.create_chip_dataset": false,
+  "qc_imputation.create_chip_dataset": true,
   "qc_imputation.run_imputation": true,
   "qc_imputation.merge_imputed_batches": false,
   "qc_imputation.imputation.force_impute_variants": {
@@ -112,6 +112,7 @@
   "qc_imputation.batch_qc.ssn_sex": "gs://fgf-input-data/R11/finngen_R11_gender_list.txt",
   "qc_imputation.batch_qc.pi_hat": 0.1,
   "qc_imputation.batch_qc.variant_missing": 0.02,
+  "qc_imputation.batch_qc.variant_missing_y": 0.05,
   "qc_imputation.batch_qc.sample_missing": 0.03,
   "qc_imputation.batch_qc.pihat_ld": "100 5 0.1",
   "qc_imputation.batch_qc.hw": 1e-6,
