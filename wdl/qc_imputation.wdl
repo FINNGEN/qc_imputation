@@ -96,8 +96,8 @@ workflow qc_imputation {
         }
         # run batch-wise qc
         call batch_qc {
-            input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]],
-            fams=[vcf_to_bed.out_fam[i]],
+            input: base=base_batch[i],
+	    beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
             fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
@@ -794,7 +794,7 @@ task panel_comparison {
         # exclude variants not in panel or AF below threshold in panel for imputation qc
         comm -23 <(cut -f2 ${bim} | sort) <(cut -f2 ${freq_panel} | sort) | \
         awk 'BEGIN{OFS="\t"} {print $1,"not_in_panel","NA"}' > ${base}.exclude_variants_panel_comparison_for_imputation.txt
-        awk 'BEGIN{OFS="\t"} NR>1&&$5<${af_panel} {print $2,"af_panel",$5}' ${freq_panel} >> ${base}.exclude_variants_panel_comparison_for_imputation.txt
+        awk 'BEGIN{OFS="\t"} NR==FNR {a[$2]} NR>FNR && FNR>1 && $5<${af_panel} && $2 in a {print $2,"af_panel",$5}' ${bim} ${freq_panel} >> ${base}.exclude_variants_panel_comparison_for_imputation.txt
 
     >>>
 
@@ -917,9 +917,11 @@ task batch_qc {
     File fam_sexcheck
     Boolean check_ssn_sex
     File ssn_sex
+    File ignore_sexcheck_samples
     File high_ld_regions
     Float hw
     Float variant_missing
+    Float variant_missing_y
     Float sample_missing
     Array[Float] f
     Float het_sd
@@ -968,11 +970,11 @@ task batch_qc {
         echo "get initial missingness for all remaining samples"
         $plink_cmd --bfile ${base} --missing --out missing
         cp missing.imiss ${base}.raw.imiss
+
         echo "check that given sex check fam file matches data"
         echo -e "`date`\tsex_check"
         join -t $'\t' -1 3 -2 2 <(awk '{OFS="\t"; $1=$1; print $0}' ${base}.fam | nl -nln | sort -k3,3) <(awk '{OFS="\t"; $1=$1; print $0}' ${fam_sexcheck} | sort -k2,2 ) | \
         sort -b -k2,2g | awk '{OFS="\t"; print $8,$1,$9,$10,$11,$12}' > sexcheck.fam
-
         if [[ `diff <(awk '{print $2}' sexcheck.fam) <(awk '{print $2}' ${base}.fam) | wc -l | awk '{print $1}'` != 0 ]]; then
             >2& echo "samples differ between ${fam_sexcheck} and ${base}.fam"
             exit 1
@@ -980,7 +982,7 @@ task batch_qc {
 
         echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
-        $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out plink_data
+        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --split-x b${genome_build} no-fail --make-bed --out plink_data
         $plink_cmd --bfile plink_data --check-sex ${sep=" " f} --out plink_data
         awk 'BEGIN{OFS="\t"} NR>1&&$5!="OK" {print $2,"sex_check",$6}' plink_data.sexcheck >> ${base}.samples_exclude.txt
         cp plink_data.sexcheck ${base}.sexcheck
@@ -1032,8 +1034,11 @@ task batch_qc {
         echo "remove variants by missingness once more after removing samples by missingness"
         echo -e "`date`\tmissingness"
 
-        awk 'BEGIN{OFS="\t"} NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("F_MISS" in h)) { print "F_MISS column not in .vmiss file" >> "/dev/stderr"; exit 1 } } \
-            NR>1 && $h["F_MISS"]!="nan" && $h["F_MISS"]>${variant_missing} {print $2,"missing_proportion",$h["F_MISS"]}' plink_data.vmiss >> ${base}.exclude_variants_batch_qc.txt
+        awk 'BEGIN{OFS="\t"}
+	     NR==1{ for(i=1;i<=NF;i++) { h[$i]=i }; if (!("F_MISS" in h)) { print "F_MISS column not in .vmiss file" >> "/dev/stderr"; exit 1 } }
+             NR>1 && $h["F_MISS"]!="nan" && (($1!="Y" && $h["F_MISS"]>${variant_missing}) || ($1=="Y" && $h["F_MISS"]>${variant_missing_y})) {
+	      print $2,"missing_proportion",$h["F_MISS"]
+	     }' plink_data.vmiss >> ${base}.exclude_variants_batch_qc.txt
         cp plink_data.vmiss ${base}.vmiss
         # NOTE variant exclusion now done, filter with high AF threshold for the rest of QC
         $plink2_cmd --bfile plink_data --maf 0.05 --exclude <(cut -f1 ${base}.exclude_variants_batch_qc.txt) --make-bed --out plink_data
@@ -1614,30 +1619,21 @@ task merge_chip_data {
     Array[File] vcfs
     String docker
 
-    # this is quite slow just concatenating vcfs
-    # e.g. plink1.9 merge would be preferred but it can require
-    # too much memory due to long allele ids
     command <<<
     
         set -euxo pipefail
         
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
-
-        # concatenate per-chr vcfs
-        for file in ${sep=" " vcfs}; do mv $file .; done
-        cat \
-        <(zcat `ls *.vcf.gz | head -1` | grep -E "^#") \
-        <(while read line; do zcat $line | grep -Ev "^#"; done < <(ls *.vcf.gz | sort -V)) \
-        | bgzip -@4 > temp && mv temp ${name}_chip_allchr.vcf.gz # rename due to above while loop otherwise including the file we are creating
-        tabix -p vcf ${name}_chip_allchr.vcf.gz
-        
-        # convert to plink
-        plink2 --memory $mem --vcf ${name}_chip_allchr.vcf.gz --freq --make-bed --out ${name}_chip_allchr
+	
+	for file in ${sep=" " vcfs}; do
+	    plink2 --memory $mem --vcf $file --make-bed --out `basename $file .gz`
+	done
+	ls -1 *.bed | xargs -I{} basename {} .bed > mergelist
+	plink --keep-allele-order --memory $mem --merge-list mergelist --make-bed --out ${name}_chip_allchr
+	plink2 --freq --bfile ${name}_chip_allchr --out ${name}_chip_allchr
     >>>
 
     output {
-        File vcf = name + "_chip_allchr.vcf.gz"
-        File vcf_idx = name + "_chip_allchr.vcf.gz.tbi"
         File bed = name + "_chip_allchr.bed"
         File bim = name + "_chip_allchr.bim"
         File fam = name + "_chip_allchr.fam"
@@ -1646,41 +1642,10 @@ task merge_chip_data {
 
     runtime {
         docker: "${docker}"
-        memory: 2*length(vcfs) + " GB"
+        memory: "100 GB"
         cpu: 4
-        disks: "local-disk 200 SSD"
+        disks: "local-disk 500 HDD"
         preemptible: 2
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
-
-task paste {
-
-    Array[File] vcfs
-    String outfile
-    String dollar = "$"
-    String storage="local-disk 300 HDD"
-    Int cpus = 32
-    String docker
-
-    command <<<
-        set -euxo pipefail
-        echo "Execute vcf-fusion&paste&bgzip command"
-        time vcf-fusion ${sep=" " vcfs}| bgzip -@${cpus} > ${outfile}
-        tabix -p vcf ${outfile}
-    >>>
-
-    output {
-        File out = outfile
-        File idx = outfile + ".tbi"
-    }
-    
-    runtime {
-        docker: "${docker}"
-        memory: "12 GB"
-        cpu: cpus
-        disks: "local-disk 300 HDD"
-        preemptible: 0
         zones: "europe-west1-b europe-west1-c europe-west1-d"
     }
 }
