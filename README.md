@@ -4,6 +4,8 @@ Genotype QC and imputation pipeline
 
 Takes a list of VCF files and input parameters and performs variant and sample wise QC for both chip QC and imputation purposes
 
+This pipeline has been developed based on characteristics of FinnGen chip genotype data
+
 ## QC steps ([wdl/qc_imputation.wdl](wdl/qc_imputation.wdl))
 
 1. `vcf_to_bed`: Convert each VCF file to PLINK bed
@@ -46,6 +48,7 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 - done per genotyping batch
 - takes glm stats computed in `glm_vs_panel`
 - lists variants with glm p-value less than the given threshold for exclusion
+- allows variants in given regions pass the glm check (such regions should be defined for disease-enriched batches with known genetic signal for the disease)
 - for imputation lists variants that are not in the panel or whose AF in the panel is less than the given threshold
 - creates AF comparison plots batch vs. panel
 
@@ -55,7 +58,7 @@ Takes a list of VCF files and input parameters and performs variant and sample w
 - creates a list of variants to exclude from each batch
 - variants listed for exclusion by `vcf_to_bed`, `gather_snpstats_joint_qc` and `panel_comparison` are excluded up front before batch-wise QC
 - excludes variants with HWE exact p-value less than the given threshold
-- excludes variants with missingness above the given threshold
+- excludes variants with missingness above the given threshold (can be a different threshold for Y chromosome)
 - excludes samples that fail PLINK sex check with the given f thresholds
 - excludes samples that don't have the same sex as indicated by SSN
 - excludes samples with missingness above the given threshold
@@ -129,16 +132,17 @@ QC/imputation pipeline qc_imputation.wdl inputs
     "qc_imputation.docker" docker image to use in QC tasks
     "qc_imputation.imputation.docker" docker image to use in imputation tasks
     "qc_imputation.merge_in_chunks.docker": docker image to use in imputed data merging
-    "qc_imputation.name": name of the run, e.g. r10_affy
+    "qc_imputation.name": name of the run, e.g. r12_affy
     "qc_imputation.create_chip_dataset": true/false, whether to create a chip dataset across batches and chromosomes
     "qc_imputation.run_imputation": true/false, whether to run also imputation or only QC - best to first set this to false and check that the QC is fine before running imputation
     "qc_imputation.merge_imputed_batches": true/false, whether to merge imputed batches (usually not necessary as merging will be later done across all legacy and affy batches)
     "qc_imputation.imputation.force_impute_variants": chromosome-to-variant_list_location dictionary, per-chr lists of variants to force imputation of even if they otherwise pass QC (can be an empty file)
     "qc_imputation.snpstats.run_joint_qc": true/false, whether to run joint qc across all batches or not
     "qc_imputation.batch_qc.check_ssn_sex": true/false, whether to check sex against provided list of social security number based sex
-    "qc_imputation.vcf_loc": location of genotype data VCF files to run
+    "qc_imputation.vcf_loc": location of the list of genotype data VCF files to run
     "qc_imputation.fam_loc": [OPTIONAL] location of genotype data FAM files corresponding to the VCF files - used for sex check if given
-    "qc_imputation.exclude_samples_loc": location of samples to exclude from the run
+    "qc_imputation.ignore_panel_comparison_regions_loc": location of the list of files per batch that include genetic regions that are allowed to fail glm comparison to imputation panel (useful if there's disease enrichment in a batch and disease-associated regions would otherwise be QC'd out), files in this list can be empty files
+    "qc_imputation.exclude_samples_loc": location of the list of files per batch that include samples to exclude from the run
     "qc_imputation.duplicate_samples": location of tab-delimited list of duplicate ids (same individual genotyped many times)
     "qc_imputation.exclude_denials": location of denial list
     "qc_imputation.include_regex": regex of samples to include in the run, e.g. "^FG" to only include FinnGen ids
@@ -161,17 +165,18 @@ QC/imputation pipeline qc_imputation.wdl inputs
     "qc_imputation.gather_snpstats_joint_qc.non_pass_n_batches_prop": variants that didn't pass Affy QC pipeline in at least this proportion of batches will be removed from all batches
     "qc_imputation.gather_snpstats_joint_qc.variant_missing_overall": maximum variant missingness computed across all batches - variants above this missingness will be excluded - this can be 1 because different batches may contain different variants which can lead to high overall missingness
     "qc_imputation.f": PLINK F thresholds for determining genotype sex - individuals between this range will be excluded
+    "qc_imputation.batch_qc.ignore_sexcheck_samples": list of sample ids one per line that are allowed to pass sex check (e.g. XXY individuals), can be an empty file
     "qc_imputation.batch_qc.ssn_sex": location of list of social security number based sexes
     "qc_imputation.batch_qc.pi_hat": pi-hat threshold to use in detecting sample contamination
-    "qc_imputation.batch_qc.variant_missing": maximum variant missingess in batch QC - variants above this missingess will be excluded from imputation of the batch
+    "qc_imputation.batch_qc.variant_missing": maximum variant missingess in batch QC - variants above this missingness will be excluded from imputation of the batch
+    "qc_imputation.batch_qc.variant_missing_y": maximum variant missingess for Y chromosome in batch QC - variants above this missingness will be excluded from imputation of the batch
     "qc_imputation.batch_qc.sample_missing": maximum sample missingess in batch QC - samples above this missingess will be excluded from imputation
     "qc_imputation.batch_qc.pihat_ld": PLINK LD parameters for pruning for pi-hat calculation
     "qc_imputation.batch_qc.hw": HWE p-value threshold for the batch - variants below this will be excluded from imputation of the batch
     "qc_imputation.batch_qc.het_sd": heterozygosity standard deviation threshold X - samples with heterozygosity lower than mean - X*sdev or higher than mean + X*sdev will be excluded
     "qc_imputation.batch_qc.pi_hat_min_n_excess": maximum excessive number of relatives based on pi-hat - in the first round of pi-hat calculation samples with more than this number of relatives will be excluded
     "qc_imputation.batch_qc.pi_hat_min_n": maximum number of relatives based on pi-hat - in the second round of pi-hat calculation samples with more than this number of relatives will be excluded
-    "qc_imputation.ref_panel": chromosome-to-imputation_panel_vcf_location_with_SNPID dictionary
-    "qc_imputation.imputation.phase_impute.ref_panel": chromosome-to-imputation_panel_vcf_location dictionary
+    "qc_imputation.ref_panel": chromosome-to-imputation_panel_vcf_location dictionary
     "qc_imputation.imputation.phase_impute.genetic_maps_eagle": chromosome-to-genetic_map_for_eagle dictionary
     "qc_imputation.imputation.phase_impute.genetic_maps_beagle": chromosome-to-genetic_map_for_beagle dictionary
     "qc_imputation.imputation.post_imputation.ref_panel_freq": location of allele frequencies in the imputation panel
@@ -183,7 +188,7 @@ QC/imputation pipeline qc_imputation.wdl inputs
 
 ## Running
 
-The QC/imputation pipeline can be run directly using Cromwell. Either the Cromwell Swagger UI or the [CromwellInteract](https://github.com/FINNGEN/CromwellInteract) command-line tool can be used
+The QC/imputation pipeline can be run using Cromwell. [CromwellInteract](https://github.com/FINNGEN/CromwellInteract) command-line tool can be used
 
 Example:
 
@@ -191,7 +196,7 @@ zip dependencies
 
 ```
 cd wdl
-zip sub.zip imp_sub.wdl post_subset_sub.wdl
+zip sub.zip imp_sub.wdl post_subset_sub.wdl merge_chunks.wdl
 cd ..
 ```
 
@@ -218,17 +223,17 @@ These examples from R7 final imputation runs.
 Files before duplicate removal created in `qc_imputation.imputation.vcfs` task:
 
 ```
-CromwellInteract.py outfiles 7c9804b0-1850-4c76-8643-c628332db399 qc_imputation.imputation.vcfs | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://from_analysis_team/r7imputation/release_run/before_duplicate_removal_for_BB/
+cromwell_interact.py outfiles 7c9804b0-1850-4c76-8643-c628332db399 qc_imputation.imputation.vcfs | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://from_analysis_team/r7imputation/release_run/before_duplicate_removal_for_BB/
 ```
 
 ```
-CromwellInteract.py outfiles a371ed62-cf5c-43ee-b755-8790eb3efe0c qc_imputation.imputation.vcfs | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://from_analysis_team/r7imputation/release_run/before_duplicate_removal_for_BB/
+cromwell_interact.py outfiles a371ed62-cf5c-43ee-b755-8790eb3efe0c qc_imputation.imputation.vcfs | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://from_analysis_team/r7imputation/release_run/before_duplicate_removal_for_BB/
 ```
 
 Files after merging in `qc_imputation.paste.out` output tag:
 
 ```
-CromwellInteract.py outfiles a371ed62-cf5c-43ee-b755-8790eb3efe0c qc_imputation.paste.out | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://output_bucket
+cromwell_interact.py outfiles a371ed62-cf5c-43ee-b755-8790eb3efe0c qc_imputation.paste.out | awk '{ print $1; print $1".tbi"}' | gsutil -m cp -I  gs://output_bucket
 ```
 
 ## Merge multiple runs and remove duplicates across runs
@@ -241,7 +246,7 @@ _NOTE: you need to have socks ssh tunnel running in port 5000 connected to cromw
 Create tunnel if necessary:
 
 ```
-CromwellInteract.py connect cromwell-machine-name
+cromwell_interact.py connect cromwell-machine-name
 ```
 
 Create configuration file using:
@@ -287,7 +292,7 @@ zip -j wdl/merge_dedup_qc_imps_deps.zip wdl/dedup.wdl
 **Run pipeline:**
 
 ```
-CromwellInteract.py submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_dedup_qc_imps_remove_non_inclusion_r7.json --deps wdl/merge_dedup_qc_imps_deps.zip
+cromwell_interact.py submit --wdl wdl/merge_dedup_qc_imps.wdl --inputs wdl/merge_dedup_qc_imps_remove_non_inclusion_r7.json --deps wdl/merge_dedup_qc_imps_deps.zip
 ```
 
 **copy output**
