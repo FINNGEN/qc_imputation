@@ -14,6 +14,8 @@ workflow qc_imputation {
     if (defined(fam_loc)) {
         Array[String] fams_sexcheck = read_lines(fam_loc)
     }
+    File ignore_panel_comparison_regions_loc
+    Array[String] ignore_panel_comparison_regions = read_lines(ignore_panel_comparison_regions_loc)
     File exclude_samples_loc
     Array[String] exclude_samples = read_lines(exclude_samples_loc)
     Map[Int, String] ref_panel
@@ -76,15 +78,18 @@ workflow qc_imputation {
         call panel_comparison {
             input: base=base_batch,
             dataset_freq_panel_intersect=glm_vs_panel.dataset_freq_panel_intersect[i],
+            ignore_panel_comparison_regions=ignore_panel_comparison_regions[i],
             freq_panel=sub(panel_bed, ".bed$", ".afreq"), files_glm=[glm_vs_panel.glm[i]],
             files_fisher=[glm_vs_panel.fisher[i]], bim=vcf_to_bed.out_bim[i], docker=docker
         }
     }
+
     # gather panel comparison stats and create a list of variants to be excluded from all batches
     # because they fail panel comparison in too many batches
     call gather_panel_comparison {
         input: exclude_variants_panel_comparison=panel_comparison.exclude_variants, docker=docker
     }
+
     scatter (i in range(length(vcfs))) {
         # if no sex check file is given, create one imputing it from the data
         if (!defined(fams_sexcheck)) {
@@ -97,7 +102,7 @@ workflow qc_imputation {
         # run batch-wise qc
         call batch_qc {
             input: base=base_batch[i],
-	    beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
+            beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
             fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
@@ -672,6 +677,7 @@ task gather_snpstats_joint_qc {
 task panel_comparison {
 
     String base
+    File ignore_panel_comparison_regions
     File dataset_freq_panel_intersect
     File freq_panel
     Array[File] files_glm
@@ -787,9 +793,22 @@ task panel_comparison {
         sink()
         EOF
 
+        # list variants that fail the panel comparison
         # ($a["P"]+0) because otherwise awk treats values of compromised precision (<1e-308) as strings
         awk 'BEGIN{OFS="\t"}NR==1{for(i=1;i<=NF;i++) a[$i]=i} NR>1 && ($a["P"]+0) < ${p} {print $1,"glm_panel",$a["P"]}' \
-        ${base}_panel_AF_glmfirthfallback.txt > ${base}.exclude_variants_panel_comparison.txt
+        ${base}_panel_AF_glmfirthfallback.txt > ${base}.exclude_variants_panel_comparison_initial.txt
+
+        # force include variants that failed by panel comparison but are in the ignore regions for this batch
+        while read line; do awk '
+        BEGIN{FS="\t"}
+        NR==FNR{sub("chr", "", $1); sub("23", "X", $1); chr=$1; start=$2; end=$3;}
+        NR>FNR{split($1,cpra,"_"); sub("chr","",cpra[1]); if(cpra[1]==chr && cpra[2] > start && cpra[2] < end) print $0}
+        ' <(echo "$line") ${base}.exclude_variants_panel_comparison_initial.txt
+        done < ${ignore_panel_comparison_regions} | sort -u > ${base}.include_variants_in_ignore_regions.txt
+        comm -23 \
+        <(sort ${base}.exclude_variants_panel_comparison_initial.txt) \
+        <(sort ${base}.include_variants_in_ignore_regions.txt) \
+        > ${base}.exclude_variants_panel_comparison.txt
 
         # exclude variants not in panel or AF below threshold in panel for imputation qc
         comm -23 <(cut -f2 ${bim} | sort) <(cut -f2 ${freq_panel} | sort) | \
@@ -802,6 +821,7 @@ task panel_comparison {
         File plots = base + "panel_AF_glmfirthfallback_plots.png"
         File exclude_variants = base + ".exclude_variants_panel_comparison.txt"
         File exclude_variants_panel = base + ".exclude_variants_panel_comparison_for_imputation.txt"
+        File include_variants_in_ignore_regions = base + ".include_variants_in_ignore_regions.txt"
         File p_af = base + "_panel_AF_glmfirthfallback.txt"
         File pvalue_report = base + "panel_AF_glmfirthfallback_pvalue_report.txt"
     }
