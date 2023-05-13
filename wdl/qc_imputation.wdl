@@ -91,19 +91,11 @@ workflow qc_imputation {
     }
 
     scatter (i in range(length(vcfs))) {
-        # if no sex check file is given, create one imputing it from the data
-        if (!defined(fams_sexcheck)) {
-            call impute_sex {
-                input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]],
-                bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
-                f=f, genome_build=genome_build, docker=docker
-            }
-        }
         # run batch-wise qc
         call batch_qc {
             input: base=base_batch[i],
             beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
-            fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
+            fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else vcf_to_bed.out_fam[i],
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
             exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
@@ -305,14 +297,15 @@ task vcf_to_bed {
 
         # convert to plink
         echo -e "`date`\tconvert to plink"
-        plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --max-alleles 2 --freq --make-bed --out ${base}
+        plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --split-par b38 --max-alleles 2 --make-bed --out plinkdat
+	# impute all sexes to be able to set male X chr hets missing
+	plink --allow-extra-chr --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
+	plink2 --allow-extra-chr --bfile plinkdat --set-hh-missing --freq --make-bed --out ${base}
         echo -e "`date`\tdone"
 
     >>>
 
     output {
-        File out_vcf = base + ".vcf.gz"
-        File out_vcf_tbi = base + ".vcf.gz.tbi"
         File out_bed = base + ".bed"
         File out_bim = base + ".bim"
         File out_fam = base + ".fam"
@@ -451,13 +444,8 @@ task missingness {
         set -euxo pipefail
 
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
-        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
-        plink2_cmd="plink2 --allow-extra-chr --memory $mem"
 
-        # impute sex to get Y chr missingness computed
-        $plink_cmd --bfile ${sub(bed, "\\.bed", "")} --impute-sex ${sep=" " f} --make-bed --out ${base}
-        
-        $plink2_cmd --bfile ${base} --missing --out ${base}
+        plink2 --allow-extra-chr --memory $mem --bfile ${sub(bed, "\\.bed", "")} --missing --out ${base}
         
         awk -v batch=${base} 'BEGIN {OFS="\t"} \
             NR==1 {
@@ -872,54 +860,6 @@ task gather_panel_comparison {
     }
 }
 
-task impute_sex {
-    
-    String base
-    Array[File] beds
-    Array[File] bims
-    Array[File] fams
-    Array[Float] f
-    Int genome_build
-    String docker
-    String dollar = "$"
-    
-    command <<<
-    
-        set -euxo pipefail
-        mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
-        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
-
-        # move plink file(s) to current directory, rename to avoid filename clash with ${base} later if there was only one file with the same name
-        for file in ${sep=" " beds}; do
-            mv $file `basename $file .bed`.orig.bed
-            mv ${dollar}{file/\.bed/\.bim} `basename $file .bed`.orig.bim
-            mv ${dollar}{file/\.bed/\.fam} `basename $file .bed`.orig.fam
-        done
-
-        echo "merge chrs (or if all chrs are in one this works anyway)"
-        echo -e "`date`\tmerge"
-        ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --make-bed --out ${base}
-        
-        $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out ${base}
-        $plink_cmd --bfile ${base} --impute-sex ${sep=" " f} --make-bed --out ${base}
-        
-    >>>
-    
-    output {
-        File fam = base + ".fam"
-    }
-
-    runtime {
-        docker: "${docker}"
-        memory: "3 GB"
-        cpu: 1
-        disks: "local-disk 200 HDD"
-        preemptible: 2
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
-
 task batch_qc {
 
     String base
@@ -1002,8 +942,7 @@ task batch_qc {
 
         echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
-        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --split-x b${genome_build} no-fail --make-bed --out plink_data
-        $plink_cmd --bfile plink_data --check-sex ${sep=" " f} --out plink_data
+        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --check-sex ${sep=" " f} --out plink_data
         awk 'BEGIN{OFS="\t"} NR>1&&$5!="OK" {print $2,"sex_check",$6}' plink_data.sexcheck >> ${base}.samples_exclude.txt
         cp plink_data.sexcheck ${base}.sexcheck
         awk 'NR==1||$5=="OK"' ${base}.sexcheck > sexcheck.ok
