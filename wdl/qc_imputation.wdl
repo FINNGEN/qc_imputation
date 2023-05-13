@@ -299,8 +299,8 @@ task vcf_to_bed {
         echo -e "`date`\tconvert to plink"
         plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --split-par b38 --max-alleles 2 --make-bed --out plinkdat
 	# impute all sexes to be able to set male X chr hets missing
-	plink --allow-extra-chr --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
-	plink2 --allow-extra-chr --bfile plinkdat --set-hh-missing --freq --make-bed --out ${base}
+	plink  --allow-extra-chr --memory $mem --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
+	plink2 --allow-extra-chr --memory $mem --bfile plinkdat --set-hh-missing --freq --make-bed --out ${base}
         echo -e "`date`\tdone"
 
     >>>
