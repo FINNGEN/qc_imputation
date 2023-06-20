@@ -166,13 +166,22 @@ workflow qc_imputation {
     }
 
     if (create_chip_dataset) {
-        # for chip qc, filter variants and samples in batches as per qc and merge batches
+        # for chip dataset, filter variants and samples in batches as per qc and merge batches
         scatter (i in range(length(vcfs))) {
             call filter_batch {
                 input: docker=docker, bed=vcf_to_bed.out_bed[i],
                 batch_qc_exclude_variants=batch_qc.variants_exclude[i],
                 exclude_samples=duplicates.allbatches_samples_exclude
             }
+        }
+        # to keep information on which samples come from which batch in the total dataset
+        # (needed input for pass samples file creation), subset samples per batch
+        call post_subset_sub.subset_samples as subset_samples_chip_per_batch {
+            input: vcfs=filter_batch.vcf, vcf_idxs=filter_batch.vcf_idx,
+            already_excluded_samples=duplicates.allbatches_samples_exclude,
+            exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
+            sample_summaries=joint_plots.sample_summaries,
+            docker=docker
         }
         scatter (chr in chrs) {
             # merge chip data of batches per chr
@@ -1570,12 +1579,18 @@ task filter_batch {
         # underscores cause trouble with vcf conversions
         sed -i 's/_/-/g' ${base}.fam
 
+        # convert to vcf too
+        $plink2_cmd --bfile ${base} --recode vcf-iid bgz --output-chr chrM --out ${base}
+        tabix -p vcf ${base}.vcf.gz
+
     >>>
 
     output {
         File out_bed = base + ".bed"
         File out_bim = base + ".bim"
         File out_fam = base + ".fam"
+        File vcf = base + ".vcf.gz"
+        File vcf_idx = base + ".vcf.gz.tbi"
     }
 
     runtime {
