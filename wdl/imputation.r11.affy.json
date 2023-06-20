@@ -31,6 +31,7 @@
     "22": "gs://r10-data/qc/empty_file",
     "23": "gs://r10-data/qc/empty_file"
   },
+  "qc_imputation.ignore_panel_comparison_regions_loc": "gs://r11-data/qc_imputation/inputs/ignore_panel_comparison_regions_loc.txt",
   "qc_imputation.snpstats.run_joint_qc": true,
   "qc_imputation.batch_qc.check_ssn_sex": true,
   "qc_imputation.vcf_loc": "gs://r11-data/qc_imputation/inputs/vcf_loc.txt",
