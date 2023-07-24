@@ -58,7 +58,7 @@ def dups_to_remove( sumstats, dupfile):
                     #removals.append(id)
                     continue
 
-                score = int(sumstats[id]["n_vars_total"]) - int(sumstats[id]["n_excluded_vars"]) - int(sumstats[id]["N_MISS_in_batch_qc"])
+                score = (1e9 if sumstats[id]["batch"].lower().strip().startswith('axiom') else 0) + int(sumstats[id]["n_vars_total"]) - int(sumstats[id]["n_excluded_vars"]) - int(sumstats[id]["N_MISS_in_batch_qc"])
                 if score>best_score:
                     if best_id != "":
                         removals.append(best_id)
