@@ -1,7 +1,5 @@
 # qc_imputation
 
-## !! For R12 set qc_imputation.f to [0.4, 0.6]! The f distribution has shifted !!
-
 Genotype QC and imputation pipeline
 
 Takes a list of VCF files and input parameters and performs variant and sample wise QC for both chip QC and imputation purposes
