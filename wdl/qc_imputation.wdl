@@ -101,7 +101,7 @@ workflow qc_imputation {
             exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
             exclude_variants_panel_comparison=panel_comparison.exclude_variants[i],
             exclude_variants_panel_comparison_joint=gather_panel_comparison.exclude_variants,
-            genome_build=genome_build, exclude_samples=exclude_samples[i],
+            genome_build=genome_build, exclude_samples_upfront=vcf_to_bed.exclude_samples_upfront[i],
             f=f, include_regex=include_regex, high_ld_regions=high_ld_regions,
             docker=docker
         }
@@ -266,14 +266,18 @@ task vcf_to_bed {
         comm -23 \
         <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
         <(cut -f1 ${exclude_samples} | sort) > include_samples.txt
-        
+
+        awk 'NR==FNR{a[$1]} NR>FNR && $1 in a' \
+        <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
+        ${exclude_samples} > ${base}.exclude_samples_upfront.txt
+
         bcftools view -S include_samples.txt ${vcf} -Ov | \
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
                     $1 !~ "^#" {
                         ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
                         sub("chr", "", $1); $1="chr"$1;
                         ## rid contigs not starting with chr
-                        if ($1~"^chr[0-9]+|^chrX|^chrY|^chrM") {
+                        if ($1~"^chr[0-9]+|^chrX$|^chrY$|^chrM") {
                             sub("chrMT", "chrM", $1); # mitochondrial is MT in Affy data and chrM in 38 fasta
                             print $0;
                         }
@@ -312,7 +316,7 @@ task vcf_to_bed {
         echo -e "`date`\tconvert to plink"
         plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --split-par b38 --make-bed --out plinkdat
         # impute all sexes to be able to set male X chr hets missing
-        plink  --allow-extra-chr --memory $mem --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
+        plink --keep-allele-order --allow-extra-chr --memory $mem --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
         plink2 --allow-extra-chr --memory $mem --bfile plinkdat --set-hh-missing --make-bed --out plinkdat
         # merge par regions back, requires cycling via sorted pgen
         plink2 --allow-extra-chr --memory $mem --bfile plinkdat --make-pgen --sort-vars --out plinkdat
@@ -347,6 +351,7 @@ task vcf_to_bed {
         File all_batch_variants = base + ".original_variants_nofilter.txt"
         File probe_map = base + ".probe_map.tsv"
         File exclude_variants_missingness = base + ".exclude_variants_single_batch_missingness.txt"
+        File exclude_samples_upfront = base + ".exclude_samples_upfront.txt"
     }
 
     runtime {
@@ -881,7 +886,7 @@ task batch_qc {
     Array[File] exclude_variants_joint
     File exclude_variants_panel_comparison
     File exclude_variants_panel_comparison_joint
-    File exclude_samples
+    File exclude_samples_upfront
     String include_regex
     File fam_sexcheck
     Boolean check_ssn_sex
@@ -924,17 +929,12 @@ task batch_qc {
         done
         echo "done moving the files"
 
-        # get samples in data to exclude by given list not counting the same sample more than once
-        ## grep returns code 1 so if no matches (e.g. no exclusions) and pipefail
-        ## stops the execution silently! below test handles that
-        awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} \
-         | { grep -E "${include_regex}" || test $?=1;} | awk 'BEGIN{OFS="\t"} {print $1,$2,"NA"}' |sort -u >> ${base}.samples_exclude.txt
+        awk 'BEGIN{OFS="\t"} {print $0,"NA"}' ${exclude_samples_upfront} >> ${base}.samples_exclude.txt
 
-        echo "merge chrs (or if all chrs are in one this works anyway) excluding variants that did not pass joint qc or panel comparison and samples in given list"
+        echo "merge chrs (or if all chrs are in one this works anyway) excluding variants that did not pass joint qc or panel comparison"
         echo -e "`date`\tmerge"
         ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt)  \
-            --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
+        $plink_cmd --merge-list mergelist.txt --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
 
         echo "get initial missingness for all remaining samples"
         $plink_cmd --bfile ${base} --missing --out missing
