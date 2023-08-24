@@ -48,11 +48,11 @@ workflow qc_imputation {
             beds=[vcf_to_bed.out_bed], bims=[vcf_to_bed.out_bim], fams=[vcf_to_bed.out_fam],
             panel_bed=panel_bed, high_ld_regions=high_ld_regions, docker=docker
         }
-        # get variants to exclude based on missingness
-        call missingness {
-            input: base=sub(sub(basename(vcfs[i], ".vcf"), "_original", ""), ".calls", ""), f=f,
-            bed=vcf_to_bed.out_bed, bim=vcf_to_bed.out_bim, fam=vcf_to_bed.out_fam, docker=docker
-        }
+    }
+
+    # gather probe-to-variant mapping across batches
+    call gather_probe_maps {
+        input: name=name, probe_maps=vcf_to_bed.probe_map, docker=docker
     }
 
     # run snpstats across batches per chromosome
@@ -68,7 +68,7 @@ workflow qc_imputation {
     call gather_snpstats_joint_qc {
         input: name=name, snpstats=snpstats.snpstats,
         exclude_variants_batch_nonpass=vcf_to_bed.exclude_variants,
-        exclude_variants_batch_missingness=missingness.exclude_variants,
+        exclude_variants_batch_missingness=vcf_to_bed.exclude_variants_missingness,
         docker=docker
     }
 
@@ -91,25 +91,17 @@ workflow qc_imputation {
     }
 
     scatter (i in range(length(vcfs))) {
-        # if no sex check file is given, create one imputing it from the data
-        if (!defined(fams_sexcheck)) {
-            call impute_sex {
-                input: base=base_batch[i], beds=[vcf_to_bed.out_bed[i]],
-                bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
-                f=f, genome_build=genome_build, docker=docker
-            }
-        }
         # run batch-wise qc
         call batch_qc {
             input: base=base_batch[i],
             beds=[vcf_to_bed.out_bed[i]], bims=[vcf_to_bed.out_bim[i]], fams=[vcf_to_bed.out_fam[i]],
-            fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else impute_sex.fam,
+            fam_sexcheck = if defined(fams_sexcheck) then select_first([fams_sexcheck])[i] else vcf_to_bed.out_fam[i],
             all_batch_variants=vcf_to_bed.all_batch_variants[i],
             exclude_variants_nonpass_nonstdalt=vcf_to_bed.exclude_variants[i],
             exclude_variants_joint=[gather_snpstats_joint_qc.exclude_variants_joint],
             exclude_variants_panel_comparison=panel_comparison.exclude_variants[i],
             exclude_variants_panel_comparison_joint=gather_panel_comparison.exclude_variants,
-            genome_build=genome_build, exclude_samples=exclude_samples[i],
+            genome_build=genome_build, exclude_samples_upfront=vcf_to_bed.exclude_samples_upfront[i],
             f=f, include_regex=include_regex, high_ld_regions=high_ld_regions,
             docker=docker
         }
@@ -259,80 +251,136 @@ task vcf_to_bed {
     String base = sub(sub(basename(vcf, ".vcf"), "_original", ""), ".calls", "")
     File exclude_samples
     String include_regex
+    Float variant_missing_n_batches
     File ref_fasta
     String docker
 
-    # TODO the two awk commands can be combined, filtering out non-PASS non-ATCG before aligning?
     command <<<
 
         set -euxo pipefail
 
-        catcmd="cat"
-        if [[ ${vcf} == *.gz ]] || [[ ${vcf} == *.bgz ]]; then catcmd="zcat"; fi
         mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
 
         # filter by given samples and prefix, align to reference, unpack multiallelics, remove extra contigs
         echo -e "`date`\talign"
         comm -23 \
-        <($catcmd ${vcf} | grep -E "^#CHROM" | head -1 | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
+        <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
         <(cut -f1 ${exclude_samples} | sort) > include_samples.txt
-        
-        bcftools view -m 2 -M 2 -S include_samples.txt ${vcf} -Ov | \
+
+        awk 'NR==FNR{a[$1]} NR>FNR && $1 in a' \
+        <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
+        ${exclude_samples} > ${base}.exclude_samples_upfront.txt
+
+        bcftools view -S include_samples.txt ${vcf} -Ov | \
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
                     $1 !~ "^#" {
                         ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
                         sub("chr", "", $1); $1="chr"$1;
-                        ## rid extra contigs
-                        if ($1~"chr[0-9]+|chrX|chrY|chrM") {
+                        ## rid contigs not starting with chr
+                        if ($1~"^chr[0-9]+|^chrX$|^chrY$|^chrM") {
                             sub("chrMT", "chrM", $1); # mitochondrial is MT in Affy data and chrM in 38 fasta
                             print $0;
                         }
                     }
             ' | \
-        bcftools norm -f ${ref_fasta} -c ws -Ov -o ${base}.aligned.vcf
-        grep -Ev "^#" ${base}.aligned.vcf | awk '{print $1"_"$2"_"$4"_"$5}' > ${base}.original_variants_nofilter.txt
-        
-        echo -e "`date`\tfilter out non-PASS non-ATCG variants, rename variant id to chr1_1234_A_T"
+        bcftools norm -f ${ref_fasta} -m-any -c ws -Ov -o ${base}.aligned.vcf
+
+        # get probe-to-variant mapping before and after aligning and unpacking
+        grep -Ev "^#" ${base}.aligned.vcf | awk 'BEGIN{OFS="\t"} {print $3,$1"_"$2"_"$4"_"$5}' > ${base}.original_variants_nofilter.txt
+        grep -Ev "^#" ${vcf} | awk 'BEGIN{OFS="\t"} {print $3,$1"_"$2"_"$4"_"$5}' > ${base}.original_variants_nofilter_prealignment.txt
+        join -t $'\t' -1 1 -2 1 \
+        <(sort -k1,1 ${base}.original_variants_nofilter_prealignment.txt) \
+        <(sort -k1,1 ${base}.original_variants_nofilter.txt) | \
+        awk 'BEGIN{FS=OFS="\t"} {print "${base}",$0}' > ${base}.probe_map.tsv
+
+        echo -e "`date`\tfilter out non-PASS non-ATCG variants, rename variant ids to chr1_1234_A_T"
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{print $0}
             $1 !~ "^#" {
-                    sub("chr", "", $1); $1="chr"$1; $3=$1"_"$2"_"$4"_"$5;
-                    if( $7 == "PASS" && $5~"^[ATCG]+$") {
-                        print $0
-                    } else {
-                        if($7!="PASS") {
-                            print $3,"batch_non_pass",$7 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
-                        }
-                        if($5!~"^[ATCG]+$") {
-                            print $3,"non_std_alt",$5 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
-                        }
+                if( $7 == "PASS" && $5~"^[ATCG]+$") {
+                    $3=$1"_"$2"_"$4"_"$5
+                    print $0
+                } else {
+                    if($7!="PASS") {
+                        print $1"_"$2"_"$4"_"$5,"batch_non_pass",$7 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
                     }
-                } ' ${base}.aligned.vcf | bgzip -@2 > ${base}.vcf.gz
-        tabix -p vcf ${base}.vcf.gz
+                    if($5!~"^[ATCG]+$") {
+                        print $1"_"$2"_"$4"_"$5,"non_std_alt",$5 > "${base}.exclude_variants_nonpass_nonstdalt.txt"
+                    }
+                }
+            } ' ${base}.aligned.vcf | bgzip -@2 > ${base}.vcf.gz
 
         # create empty exclusion list if no exlusions
         touch ${base}.exclude_variants_nonpass_nonstdalt.txt
 
         # convert to plink
         echo -e "`date`\tconvert to plink"
-        plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --max-alleles 2 --freq --make-bed --out ${base}
+        plink2 --allow-extra-chr --memory $mem --vcf ${base}.vcf.gz --split-par b38 --make-bed --out plinkdat
+        # impute all sexes to be able to set male X chr hets missing
+        plink --keep-allele-order --allow-extra-chr --memory $mem --bfile plinkdat --impute-sex 0.5 0.5 --make-bed --out plinkdat
+        plink2 --allow-extra-chr --memory $mem --bfile plinkdat --set-hh-missing --make-bed --out plinkdat
+        # merge par regions back, requires cycling via sorted pgen
+        plink2 --allow-extra-chr --memory $mem --bfile plinkdat --make-pgen --sort-vars --out plinkdat
+        plink2 --allow-extra-chr --memory $mem --pfile plinkdat --merge-par --make-bed --out ${base}
+
+        # compute missingness
+        plink2 --allow-extra-chr --memory $mem --bfile plinkdat --freq --missing --out ${base}
+        awk -v batch=${base} 'BEGIN {OFS="\t"}
+            NR==1 {
+                for(i=1;i<=NF;i++) { h[$i]=i };
+                if( !("F_MISS" in h && "ID" in h) )
+                    {print "F_MISS and ID columns expected in plink output." > "/dev/stderr"; exit 1;
+                } 
+            }
+            NR>1 {
+                if($h["F_MISS"]>${variant_missing_n_batches}) {
+                    print $h["ID"],"joint_qc_batch_high_missing",batch":"$h["F_MISS"]
+                }
+            }
+            ' ${base}".vmiss" >> ${base}.exclude_variants_single_batch_missingness.txt
+
         echo -e "`date`\tdone"
 
     >>>
 
     output {
-        File out_vcf = base + ".vcf.gz"
-        File out_vcf_tbi = base + ".vcf.gz.tbi"
         File out_bed = base + ".bed"
         File out_bim = base + ".bim"
         File out_fam = base + ".fam"
         File out_afreq = base + ".afreq"
         File exclude_variants = base + ".exclude_variants_nonpass_nonstdalt.txt"
         File all_batch_variants = base + ".original_variants_nofilter.txt"
+        File probe_map = base + ".probe_map.tsv"
+        File exclude_variants_missingness = base + ".exclude_variants_single_batch_missingness.txt"
+        File exclude_samples_upfront = base + ".exclude_samples_upfront.txt"
     }
 
     runtime {
         docker: "${docker}"
         memory: "3 GB"
+        cpu: 2
+        disks: "local-disk 200 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
+task gather_probe_maps {
+
+    String name
+    String docker
+    Array[File] probe_maps
+
+    command <<<
+        cat ${sep=' ' probe_maps} | bgzip -@2 > ${name}.probe_map.tsv.gz
+    >>>
+
+    output {
+        File out = "${name}.probe_map.tsv.gz"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "2 GB"
         cpu: 2
         disks: "local-disk 200 HDD"
         preemptible: 2
@@ -440,61 +488,6 @@ task glm_vs_panel {
         disks: "local-disk 200 HDD"
         preemptible: 2
         zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
-
-task missingness {
-
-    String base
-    File bed
-    File bim
-    File fam
-    Float variant_missing_n_batches
-    Array[Float] f
-    String docker
-
-    String dollar = "$"
-
-    command <<<
-
-        set -euxo pipefail
-
-        mem=$((`free -m | grep -oP '\d+' | head -n 1`-100))
-        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
-        plink2_cmd="plink2 --allow-extra-chr --memory $mem"
-
-        # impute sex to get Y chr missingness computed
-        $plink_cmd --bfile ${sub(bed, "\\.bed", "")} --impute-sex ${sep=" " f} --make-bed --out ${base}
-        
-        $plink2_cmd --bfile ${base} --missing --out ${base}
-        
-        awk -v batch=${base} 'BEGIN {OFS="\t"} \
-            NR==1 {
-                for(i=1;i<=NF;i++) { h[$i]=i }; \
-                if( !("F_MISS" in h && "ID" in h) ) \
-                    {print "F_MISS and ID columns expected in plink output." > "/dev/stderr"; exit 1; \
-                }  \
-            } \
-            NR>1 { \
-                if($h["F_MISS"]>${variant_missing_n_batches}) { \
-                    print $h["ID"],"joint_qc_batch_high_missing",batch":"$h["F_MISS"]
-                }\
-            } \
-            ' ${base}".vmiss" >> ${base}.exclude_variants_single_batch_missingness.txt
-
-    >>>
-
-    runtime {
-        docker: "${docker}"
-        memory: "3 GB"
-        cpu: 1
-        disks: "local-disk 200 HDD"
-        preemptible: 2
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-
-    output {
-        File exclude_variants = base + ".exclude_variants_single_batch_missingness.txt"
     }
 }
 
@@ -881,54 +874,6 @@ task gather_panel_comparison {
     }
 }
 
-task impute_sex {
-    
-    String base
-    Array[File] beds
-    Array[File] bims
-    Array[File] fams
-    Array[Float] f
-    Int genome_build
-    String docker
-    String dollar = "$"
-    
-    command <<<
-    
-        set -euxo pipefail
-        mem=$((`free -m | grep -oP '\d+' | head -n 1`-500))
-        plink_cmd="plink --allow-extra-chr --keep-allele-order --memory $mem"
-
-        # move plink file(s) to current directory, rename to avoid filename clash with ${base} later if there was only one file with the same name
-        for file in ${sep=" " beds}; do
-            mv $file `basename $file .bed`.orig.bed
-            mv ${dollar}{file/\.bed/\.bim} `basename $file .bed`.orig.bim
-            mv ${dollar}{file/\.bed/\.fam} `basename $file .bed`.orig.fam
-        done
-
-        echo "merge chrs (or if all chrs are in one this works anyway)"
-        echo -e "`date`\tmerge"
-        ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --make-bed --out ${base}
-        
-        $plink_cmd --bfile ${base} --split-x b${genome_build} no-fail --make-bed --out ${base}
-        $plink_cmd --bfile ${base} --impute-sex ${sep=" " f} --make-bed --out ${base}
-        
-    >>>
-    
-    output {
-        File fam = base + ".fam"
-    }
-
-    runtime {
-        docker: "${docker}"
-        memory: "3 GB"
-        cpu: 1
-        disks: "local-disk 200 HDD"
-        preemptible: 2
-        zones: "europe-west1-b europe-west1-c europe-west1-d"
-    }
-}
-
 task batch_qc {
 
     String base
@@ -941,7 +886,7 @@ task batch_qc {
     Array[File] exclude_variants_joint
     File exclude_variants_panel_comparison
     File exclude_variants_panel_comparison_joint
-    File exclude_samples
+    File exclude_samples_upfront
     String include_regex
     File fam_sexcheck
     Boolean check_ssn_sex
@@ -980,21 +925,16 @@ task batch_qc {
         for file in ${sep=" " beds}; do
             mv $file `basename $file .bed`.orig.bed
             mv ${dollar}{file/\.bed/\.bim} `basename $file .bed`.orig.bim
-            mv ${dollar}{file/\.bed/\.fam} `basename $file .bed`.orig.fam
+            cp ${dollar}{file/\.bed/\.fam} `basename $file .bed`.orig.fam # cp as this file may also be ${fam_sexcheck}
         done
         echo "done moving the files"
 
-        # get samples in data to exclude by given list not counting the same sample more than once
-        ## grep returns code 1 so if no matches (e.g. no exclusions) and pipefail
-        ## stops the execution silently! below test handles that
-        awk 'NR==FNR {a[$2]=1} NR>FNR && $1 in a && !seen[$1]++' ${fam_sexcheck} ${exclude_samples} \
-         | { grep -E "${include_regex}" || test $?=1;} | awk 'BEGIN{OFS="\t"} {print $1,$2,"NA"}' |sort -u >> ${base}.samples_exclude.txt
+        awk 'BEGIN{OFS="\t"} {print $0,"NA"}' ${exclude_samples_upfront} >> ${base}.samples_exclude.txt
 
-        echo "merge chrs (or if all chrs are in one this works anyway) excluding variants that did not pass joint qc or panel comparison and samples in given list"
+        echo "merge chrs (or if all chrs are in one this works anyway) excluding variants that did not pass joint qc or panel comparison"
         echo -e "`date`\tmerge"
         ls -1 *.bed | sed 's/\.bed//' > mergelist.txt
-        $plink_cmd --merge-list mergelist.txt --remove <(awk '{print 0,$1}' ${base}.samples_exclude.txt)  \
-            --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
+        $plink_cmd --merge-list mergelist.txt --exclude <(cut -f1 upfront_exclude_variants.txt | sort -u) --make-bed --out ${base}
 
         echo "get initial missingness for all remaining samples"
         $plink_cmd --bfile ${base} --missing --out missing
@@ -1011,8 +951,7 @@ task batch_qc {
 
         echo "check sex excluding PAR region"
         mv sexcheck.fam ${base}.fam
-        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --split-x b${genome_build} no-fail --make-bed --out plink_data
-        $plink_cmd --bfile plink_data --check-sex ${sep=" " f} --out plink_data
+        $plink_cmd --bfile ${base} --remove <(awk '{OFS="\t"; print "0",$1}' ${ignore_sexcheck_samples} | sort -u) --check-sex ${sep=" " f} --out plink_data
         awk 'BEGIN{OFS="\t"} NR>1&&$5!="OK" {print $2,"sex_check",$6}' plink_data.sexcheck >> ${base}.samples_exclude.txt
         cp plink_data.sexcheck ${base}.sexcheck
         awk 'NR==1||$5=="OK"' ${base}.sexcheck > sexcheck.ok
@@ -1108,7 +1047,7 @@ task batch_qc {
         ## adding variants only once per batch
         awk 'BEGIN{OFS="\t"} NR==FNR{ exists[$1]=1 }  \
             NR>FNR&&($1 in exists)&&(!dups[$1]++){ print $1,$2,$3 } ' \
-        ${all_batch_variants} upfront_exclude_variants.txt \
+        <(cut -f2 ${all_batch_variants}) upfront_exclude_variants.txt \
         >> ${base}.exclude_variants_batch_qc.txt
 
         ## create frq per batch to get original variants in a batch and their AF
