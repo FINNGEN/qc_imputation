@@ -30,7 +30,6 @@ workflow qc_imputation {
 
     File? exclude_denials
     File? duplicate_samples
-    File? exclude_probes
 
     ### symmetric variants close to 0.5 can remain with other data than FinnGen
     # (legacy data aligned with Will Raynards mapping files according to Timo and Affy data should be aligned correctly??)
@@ -41,7 +40,7 @@ workflow qc_imputation {
         # convert batches from vcf to bed
         call vcf_to_bed {
             input: vcf=vcfs[i], exclude_samples=exclude_samples[i],
-            include_regex=include_regex, exclude_probes=exclude_probes, docker=docker
+            include_regex=include_regex, docker=docker
         }
         # run glm between each batch and panel
         call glm_vs_panel {
@@ -273,8 +272,10 @@ task vcf_to_bed {
         <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
         ${exclude_samples} > ${base}.exclude_samples_upfront.txt
 
+        touch dummy_exclude_probes.txt
+
         bcftools view -S include_samples.txt ${vcf} -Ov | \
-        ${true='grep -Fwvf ${exclude_probes}' false='cat' defined(exclude_probes)} \
+        grep -Fwvf ${default='dummy_exclude_probes.txt' exclude_probes} | \
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
                     $1 !~ "^#" {
                         ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
