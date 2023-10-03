@@ -274,8 +274,7 @@ task vcf_to_bed {
 
         touch dummy_exclude_probes.txt
 
-        bcftools view -S include_samples.txt ${vcf} -Ov | \
-        grep -Fwvf ${default='dummy_exclude_probes.txt' exclude_probes} | \
+        bcftools view -S include_samples.txt --exclude ID=@${default='dummy_exclude_probes.txt' exclude_probes} ${vcf} -Ov | \
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
                     $1 !~ "^#" {
                         ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
