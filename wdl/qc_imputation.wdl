@@ -254,6 +254,7 @@ task vcf_to_bed {
     Float variant_missing_n_batches
     File ref_fasta
     String docker
+    File? exclude_probes
 
     command <<<
 
@@ -271,7 +272,9 @@ task vcf_to_bed {
         <(zcat -f ${vcf} | grep -m1 -E "^#CHROM" | tr '\t' '\n' | tail -n+10 | grep -E "${include_regex}" | sort) \
         ${exclude_samples} > ${base}.exclude_samples_upfront.txt
 
-        bcftools view -S include_samples.txt ${vcf} -Ov | \
+        touch dummy_exclude_probes.txt
+
+        bcftools view -S include_samples.txt --exclude ID=@${default='dummy_exclude_probes.txt' exclude_probes} ${vcf} -Ov | \
         awk 'BEGIN{OFS="\t"} $1 ~ "^#"{ print $0;}
                     $1 !~ "^#" {
                         ## chr is needed in 38 fasta norm next. annoying uncompress/compress but cant avoid.
