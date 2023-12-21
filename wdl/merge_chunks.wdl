@@ -201,9 +201,9 @@ task concatenate_chunks{
     command{
         set -euxo pipefail
         #move chunks here so cromwell id etc do not mess up sorting
-        mv -t ./ ${sep="\t" chunks}
-
-        ls -1 *.gz | sort -V |xargs cat > ${filename} 
+        mv -t ./ ${sep=" " chunks}
+        
+        find ./ -name "merged_chunk*.gz" | sort -V | xargs cat > ${filename} 
 
         tabix -p vcf ${filename}
 
