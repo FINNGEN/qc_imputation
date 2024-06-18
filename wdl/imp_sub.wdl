@@ -7,6 +7,7 @@ workflow imputation {
     Map[Int, String] force_impute_variants
     String exclude_samples
     Map[Int, String] ref_panel
+    Boolean add_batch_suffix = true
     String docker
 
     File? exclude_denials
@@ -25,7 +26,9 @@ workflow imputation {
             ref_panel=ref_panel, docker=docker
         }
         call post_imputation {
-            input: chr=chr, vcf=phase_impute.out_imputed, docker=docker
+            input: chr=chr, vcf=phase_impute.out_imputed,
+            add_batch_suffix = add_batch_suffix,
+            docker=docker
         }
     }
 
@@ -158,6 +161,7 @@ task post_imputation {
 	File annot_tab
 	File annot_tab_index
 	String annot_col_incl
+    Boolean add_batch_suffix
     String docker
     String dollar = "$"
 
@@ -178,9 +182,12 @@ task post_imputation {
         time Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
 
         # annotate, edit tags and index
-        [[ ${base} =~ (.*)_qcd_imputed ]]
-        batch=${dollar}{BASH_REMATCH[1]}
-        edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch NS:NS_$batch AR2: DR2: IMP:"
+        edits="AR2: DR2: IMP:"
+        if ${add_batch_suffix}; then
+            [[ ${base} =~ (.*)_qcd_imputed ]]
+            batch=${dollar}{BASH_REMATCH[1]}
+            edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch NS:NS_$batch AR2: DR2: IMP:"
+        fi
         time bcftools index -t -f ${base}_imputed_infotags.vcf.gz
 		time bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
 		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Ov | \

@@ -205,7 +205,8 @@ workflow qc_imputation {
                 batch_qc_exclude_variants=batch_qc.variants_exclude,
                 panel_exclude_variants=panel_comparison.exclude_variants_panel,
                 exclude_samples=duplicates.allbatches_samples_exclude,
-                ref_panel=ref_panel
+                ref_panel=ref_panel,
+                add_batch_suffix=false
             }
             # exclude duplicates (same sample with two different ids) and denials
             call post_subset_sub.subset_samples as subset_samples {
@@ -213,6 +214,7 @@ workflow qc_imputation {
                 already_excluded_samples=duplicates.allbatches_samples_exclude,
                 exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
                 sample_summaries=joint_plots.sample_summaries,
+                add_batch_suffix=true,
                 docker=docker
             }
         }

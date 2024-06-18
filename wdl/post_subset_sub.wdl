@@ -10,6 +10,8 @@ workflow subset_samples {
     File? duplicate_samples
     File? exclude_denials
 
+    Boolean add_batch_suffix = false
+
     String docker
 
     scatter( b in range(length(vcfs)) ) {
@@ -31,6 +33,8 @@ task subset {
     File vcf
     File vcf_idx
     File sample_summaries
+
+    Boolean add_batch_suffix
 
     ## this is used only to see if some duplicates are not duplicates after qc.
     File already_excluded_samples
@@ -131,7 +135,21 @@ task subset {
 
         # index and add info tags
         echo "`date`\ttags"
-        bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        if ${add_batch_suffix}; then
+            bcftools +fill-tags ${bn}_temp.vcf.gz -Ov -- -t AF,AN,AC,AC_Hom,AC_Het,NS | \
+            sed -e 's/\([;=[:space:]]\)AF\([,;=[:space:]]\)/\1AF_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AN\([,;=[:space:]]\)/\1AN_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)INFO\([,;=[:space:]]\)/\1INFO_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)CHIP\([,;=[:space:]]\)/\1CHIP_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC_Het\([,;=[:space:]]\)/\1AC_Het_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC_Hom\([,;=[:space:]]\)/\1AC_Hom_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC\([,;=[:space:]]\)/\1AC_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)HWE\([,;=[:space:]]\)/\1HWE_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)NS\([,;=[:space:]]\)/\1NS_${bn}\2/' | \
+            bgzip > ${bn}_subset.vcf.gz
+        else
+            bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        fi
         echo "`date`\tindex vcf"
         tabix -p vcf ${bn}"_subset.vcf.gz"
         echo "`date`\tdone"
