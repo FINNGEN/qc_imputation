@@ -19,7 +19,8 @@ workflow subset_samples {
         ## good to make all this optional for other imputation tasks, at least at some point.
         call subset { input: vcf=vcfs[b], vcf_idx=vcf_idxs[b], already_excluded_samples=already_excluded_samples,
             duplicate_samples=duplicate_samples, sample_summaries=sample_summaries,
-            docker=docker, exclude_denials=exclude_denials
+            docker=docker, exclude_denials=exclude_denials,
+            add_batch_suffix=add_batch_suffix
         }
     }
 
