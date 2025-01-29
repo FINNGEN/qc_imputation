@@ -10,8 +10,6 @@ workflow imputation {
     Boolean add_batch_suffix = true
     String docker
 
-    File? exclude_denials
-
     scatter (i in range(length(beds))) {
         call plink_to_vcf {
             input: chr=chr, bed=beds[i],
