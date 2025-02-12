@@ -45,6 +45,8 @@ task subset {
     String docker
     String bn=basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
 
+    # If the vcf is coming from imputation, the batch name is the part before "_qcd_imputed_tags_edited"
+    String batch=sub(bn,"_qcd_imputed_tags_edited","")
 
     command <<<
         set -euxo pipefail
@@ -138,15 +140,15 @@ task subset {
         echo "`date`\ttags"
         if ${add_batch_suffix}; then
             bcftools +fill-tags ${bn}_temp.vcf.gz -Ov -- -t AF,AN,AC,AC_Hom,AC_Het,NS | \
-            sed -e 's/\([;=[:space:]]\)AF\([,;=[:space:]]\)/\1AF_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AN\([,;=[:space:]]\)/\1AN_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)INFO\([,;=[:space:]]\)/\1INFO_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)CHIP\([,;=[:space:]]\)/\1CHIP_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC_Het\([,;=[:space:]]\)/\1AC_Het_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC_Hom\([,;=[:space:]]\)/\1AC_Hom_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC\([,;=[:space:]]\)/\1AC_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)HWE\([,;=[:space:]]\)/\1HWE_${bn}\2/' | \
-            sed -e 's/\([;=[:space:]]\)NS\([,;=[:space:]]\)/\1NS_${bn}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AF\([,;=[:space:]]\)/\1AF_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AN\([,;=[:space:]]\)/\1AN_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)INFO\([,;=[:space:]]\)/\1INFO_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)CHIP\([,;=[:space:]]\)/\1CHIP_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC_Het\([,;=[:space:]]\)/\1AC_Het_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC_Hom\([,;=[:space:]]\)/\1AC_Hom_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)AC\([,;=[:space:]]\)/\1AC_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)HWE\([,;=[:space:]]\)/\1HWE_${batch}\2/' | \
+            sed -e 's/\([;=[:space:]]\)NS\([,;=[:space:]]\)/\1NS_${batch}\2/' | \
             bgzip > ${bn}_subset.vcf.gz
         else
             bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
