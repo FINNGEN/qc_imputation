@@ -140,16 +140,19 @@ task subset {
         echo "`date`\ttags"
         if ${add_batch_suffix}; then
             bcftools +fill-tags ${bn}_temp.vcf.gz -Ov -- -t AF,AN,AC,AC_Hom,AC_Het,NS | \
-            sed -e 's/\([;=[:space:]]\)AF\([,;=[:space:]]\)/\1AF_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AN\([,;=[:space:]]\)/\1AN_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)INFO\([,;=[:space:]]\)/\1INFO_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)CHIP\([,;=[:space:]]\)/\1CHIP_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC_Het\([,;=[:space:]]\)/\1AC_Het_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC_Hom\([,;=[:space:]]\)/\1AC_Hom_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)AC\([,;=[:space:]]\)/\1AC_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)HWE\([,;=[:space:]]\)/\1HWE_${batch}\2/' | \
-            sed -e 's/\([;=[:space:]]\)NS\([,;=[:space:]]\)/\1NS_${batch}\2/' | \
-            bgzip > ${bn}_subset.vcf.gz
+            awk '
+            BEGIN {
+                FS=OFS="\t"
+            }
+            /^##INFO/ {
+                $0=gensub(/<ID=(AF|AN|INFO|CHIP|AC_Het|AC_Hom|AC|HWE|NS),/, "<ID=\\1_${batch},", 1)
+            }
+            /^[^#]/ {
+                $8=gensub(/(AF|AN|INFO|CHIP|AC_Het|AC_Hom|AC|HWE|NS)=/, "\\1_${batch}=", "g", $8)
+            }
+            {
+                print
+            }' | bgzip > ${bn}_subset.vcf.gz
         else
             bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
         fi
