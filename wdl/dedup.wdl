@@ -28,6 +28,8 @@ task subset {
     File removals
     String docker
 
+    Int disk_size = ceil(size(vcf, "GB")) * 2 + 5
+
     command <<<
 
         set -x pipefail
@@ -37,14 +39,15 @@ task subset {
         n_rem=$(wc -l included_to_be_removed|awk '{ print $1}')
         if [[ $n_rem -eq 0 ]];
         then
-            echo "No samples to be removed from this batch".
-            mv ${vcf} ${bn}"_subset.vcf.gz"
-            mv ${tbi} ${bn}"_subset.vcf.gz.tbi"
+            echo "No samples to be removed from this batch"
+            cmd="zcat -f"
         else
             echo "Subsetting "$n_rem" samples"
-            bcftools view -S ^included_to_be_removed --force-samples ${vcf} -Ov | bgzip -@ 4 > ${bn}"_subset.vcf.gz"
-            tabix -p vcf ${bn}"_subset.vcf.gz"
+            cmd="bcftools view -S ^included_to_be_removed --force-samples -Ov"
         fi
+        $cmd ${vcf} | java -jar /tools/tagEditing_v1.1.jar AF: AN: AC: AC_Hom: AC_Het: NS: INFO: | bgzip -@ 2 > ${bn}"_subset.vcf.gz"
+        tabix -p vcf ${bn}"_subset.vcf.gz"
+
     >>>
 
     output {
@@ -55,9 +58,9 @@ task subset {
 
     runtime {
         docker: docker
-        memory: "7 GB"
+        memory: "8 GB"
         cpu: 4
-        disks: "local-disk 200 HDD"
+        disks: "local-disk " + disk_size + " HDD"
         zones: "europe-west1-b europe-west1-c europe-west1-d"
         preemptible: 2
     }
