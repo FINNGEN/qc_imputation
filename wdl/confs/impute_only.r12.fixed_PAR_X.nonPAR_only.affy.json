@@ -1,0 +1,34 @@
+{
+  "impute.docker": "eu.gcr.io/finngen-refinery-dev/qc_imputation:test_paste_0.1.0",
+  "impute.imputation.docker": "eu.gcr.io/finngen-refinery-dev/pftools:0.1.3",
+  "impute.merge_in_chunks.docker": "eu.gcr.io/finngen-refinery-dev/vcf-fusion:a9b934d",
+  "impute.name": "r12_axiom_fixed_nonPAR_X_only",
+  "impute.merge_imputed_batches": true,
+  "impute.allbatches_samples_exclude": "gs://r12-data/qc_imputation/outputs/affy/duplicates/all_batches.samples_exclude.txt",
+  "impute.bed_loc": "gs://r12-data/qc_imputation/inputs/affy/r12_affy_bed_loc",
+  "impute.batch_qc_exclude_variants_loc": "gs://r12-data/qc_imputation/inputs/affy/r12_affy_batch_qc_exclude_variants_loc",
+  "impute.panel_exclude_variants_loc": "gs://r12-data/qc_imputation/inputs/affy/r12_affy_panel_exclude_variants_loc",
+  "impute.sample_summaries": "gs://r12-data/qc_imputation/outputs/affy/joint_plots/r12_axiom_sample_summaries.txt",
+  "impute.imputation.force_impute_variants": {
+    "23": "gs://r10-data/qc/empty_file"
+  },
+  "impute.duplicate_samples": "gs://fgf-input-data/R12/finngen_R12_duplicate_list.txt",
+  "impute.exclude_denials": "gs://fgf-input-data/R12/finngen_R12_finngenid_exclusion_list.txt",
+  "impute.imputation_chrs": [
+    23
+  ],
+  "impute.ref_panel": {
+    "23": "gs://finngen-imputation-panel/sisu4.2/fixed_PAR_X/vcf/Sisu4.2.chrX.v2.nonXPAR.phased_SNPID.vcf.gz"
+  },
+  "impute.imputation.phase_impute.genetic_maps_eagle": {
+    "23": "gs://finngen-imputation-panel/sisu3/geneticMaps/eagle_geneticMap_b38_chr23.map"
+  },
+  "impute.imputation.phase_impute.genetic_maps_beagle": {
+    "23": "gs://finngen-imputation-panel/sisu3/geneticMaps/beagle_geneticMap_b38_chr23.map"
+  },
+  "impute.imputation.post_imputation.ref_panel_freq": "gs://finngen-imputation-panel/sisu4.2/fixed_PAR_X/frq/Sisu4.2.chrX.v2.with_header.frq",
+  "impute.imputation.post_imputation.annot_hdr": "gs://finngen-imputation-panel/sisu3/annotation.hdr",
+  "impute.imputation.post_imputation.annot_tab": "gs://finngen-imputation-panel/sisu3/annotation.tab.gz",
+  "impute.imputation.post_imputation.annot_tab_index": "gs://finngen-imputation-panel/sisu3/annotation.tab.gz.tbi",
+  "impute.imputation.post_imputation.annot_col_incl": "CHROM,FROM,TO,INFO/CHIP,-,-,-"
+}
