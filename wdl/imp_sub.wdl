@@ -7,25 +7,53 @@ workflow imputation {
     Map[Int, String] force_impute_variants
     String exclude_samples
     Map[Int, String] ref_panel
+    String ref_panel_nonPAR
+    String ref_panel_PAR
+    Map[Int, String] genetic_maps_eagle
+    Map[Int, String] genetic_maps_beagle
+    Boolean add_batch_suffix = true
     String docker
-
-    File? exclude_denials
 
     scatter (i in range(length(beds))) {
         call plink_to_vcf {
-            input: chr=chr, bed=beds[i],
-            batch_qc_exclude_variants=batch_qc_exclude_variants[i],
-            panel_exclude_variants=panel_exclude_variants[i],
-            exclude_samples=exclude_samples,
-            force_impute_variants=force_impute_variants[chr],
-            docker=docker
+            input:
+                chr=chr,
+                bed=beds[i],
+                batch_qc_exclude_variants=batch_qc_exclude_variants[i],
+                panel_exclude_variants=panel_exclude_variants[i],
+                exclude_samples=exclude_samples,
+                force_impute_variants=force_impute_variants[chr],
+                docker=docker
         }
-        call phase_impute {
-            input: chr=chr, vcf=plink_to_vcf.vcf,
-            ref_panel=ref_panel, docker=docker
+        if (chr == 23) {
+            call phase_impute_X {
+                input:
+                chr=chr,
+                vcf=plink_to_vcf.vcf,
+                ref_panel_PAR=ref_panel_PAR,
+                ref_panel_nonPAR=ref_panel_nonPAR,
+                genetic_maps_eagle=genetic_maps_eagle,
+                genetic_maps_beagle=genetic_maps_beagle,
+                docker=docker
+            }
+        }
+        if (chr != 23) {
+            call phase_impute {
+                input:
+                chr=chr,
+                vcf=plink_to_vcf.vcf,
+                ref_panel=ref_panel,
+                genetic_maps_eagle=genetic_maps_eagle,
+                genetic_maps_beagle=genetic_maps_beagle,
+                docker=docker
+            }
         }
         call post_imputation {
-            input: chr=chr, vcf=phase_impute.out_imputed, docker=docker
+            input:
+            chr=chr,
+            vcf=select_first([phase_impute_X.out_imputed,phase_impute.out_imputed]),
+            add_batch_suffix = add_batch_suffix,
+            docker=docker
         }
     }
 
@@ -148,6 +176,85 @@ task phase_impute {
     }
 }
 
+task phase_impute_X {
+
+    Int chr
+    String chrname = if chr == 23 then "chrX" else chr
+    File vcf
+    String base = basename(vcf, ".vcf.gz")
+    File ref_panel_PAR
+    File ref_panel_nonPAR
+    Int PAR1_start = 10001
+    Int PAR1_end = 2781479
+    Int PAR2_start = 155701383
+    Int PAR2_end = 156030895
+    Map[Int, String] genetic_maps_eagle
+    Map[Int, String] genetic_maps_beagle
+    File genetic_map_eagle = genetic_maps_eagle[chr]
+    File genetic_map_beagle = genetic_maps_beagle[chr]
+    String docker
+    String dollar = "$"
+
+    command <<<
+
+        n_cpu=`grep -c ^processor /proc/cpuinfo`
+        g_mem=$((`free -g | grep -oP '\d+' | head -n 1`-1))
+
+        eagle \
+            --vcf            ${vcf} \
+            --chrom          ${chrname} \
+            --geneticMapFile ${genetic_map_eagle} \
+            --outPrefix      ${base}_for_imputation \
+            --Kpbwt          20000 \
+            --numThreads     $n_cpu
+
+        java -Xss5m -Xmx${dollar}{g_mem}g -jar /tools/beagle/beagle.27Jan18.7e1.jar \
+            gt=${base}_for_imputation.vcf.gz \
+            ref=${ref_panel_PAR} \
+            map=${genetic_map_beagle} \
+            out=${base}_imputed_PAR \
+            niterations=10 \
+            ne=20000 \
+            impute=true \
+            gprobs=true \
+            seed=-99999 \
+            nthreads=$n_cpu
+
+        java -Xss5m -Xmx${dollar}{g_mem}g -jar /tools/beagle/beagle.27Jan18.7e1.jar \
+            gt=${base}_for_imputation.vcf.gz \
+            ref=${ref_panel_nonPAR} \
+            map=${genetic_map_beagle} \
+            out=${base}_imputed_nonPAR \
+            niterations=10 \
+            ne=20000 \
+            impute=true \
+            gprobs=true \
+            seed=-99999 \
+            nthreads=$n_cpu
+        
+        bcftools index -t -f ${base}_imputed_PAR.vcf.gz
+        bcftools index -t -f ${base}_imputed_nonPAR.vcf.gz
+        bcftools view -i 'POS >= ${PAR1_start} & POS <= ${PAR1_end}' ${base}_imputed_PAR.vcf.gz | bgzip > PAR1.vcf.gz
+        bcftools view -i 'POS >= ${PAR2_start} & POS <= ${PAR2_end}' ${base}_imputed_PAR.vcf.gz | bgzip > PAR2.vcf.gz
+        bcftools concat PAR1.vcf.gz ${base}_imputed_nonPAR.vcf.gz PAR2.vcf.gz | bgzip > ${base}_imputed.vcf.gz
+
+    >>>
+
+    output {
+        File out_phased = base + "_for_imputation.vcf.gz"
+        File out_imputed = base + "_imputed.vcf.gz"
+    }
+
+    runtime {
+        docker: "${docker}"
+        memory: "24 GB"
+        cpu: 32
+        disks: "local-disk 100 HDD"
+        preemptible: 2
+        zones: "europe-west1-b europe-west1-c europe-west1-d"
+    }
+}
+
 task post_imputation {
 
     String chr
@@ -158,6 +265,7 @@ task post_imputation {
 	File annot_tab
 	File annot_tab_index
 	String annot_col_incl
+    Boolean add_batch_suffix
     String docker
     String dollar = "$"
 
@@ -178,9 +286,12 @@ task post_imputation {
         time Rscript --no-save /tools/r_scripts/plot_INFO_and_AF_for_imputed_chrs.R ${base} ${ref_panel_freq} ${chr} ${base}_varID_AF_INFO_GROUP.txt
 
         # annotate, edit tags and index
-        [[ ${base} =~ (.*)_qcd_imputed ]]
-        batch=${dollar}{BASH_REMATCH[1]}
-        edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch NS:NS_$batch AR2: DR2: IMP:"
+        edits="AR2: DR2: IMP:"
+        if ${add_batch_suffix}; then
+            [[ ${base} =~ (.*)_qcd_imputed ]]
+            batch=${dollar}{BASH_REMATCH[1]}
+            edits="AF:AF_$batch INFO:INFO_$batch CHIP:CHIP_$batch AC_Het:AC_Het_$batch AC_Hom:AC_Hom_$batch HWE:HWE_$batch NS:NS_$batch AR2: DR2: IMP:"
+        fi
         time bcftools index -t -f ${base}_imputed_infotags.vcf.gz
 		time bcftools annotate -i 'INFO/IMP=0' -k -a ${annot_tab} -h ${annot_hdr} -c ${annot_col_incl} ${base}_imputed_infotags.vcf.gz -Ou | \
 		bcftools annotate --set-id '%CHROM\_%POS\_%REF\_%ALT' -Ov | \

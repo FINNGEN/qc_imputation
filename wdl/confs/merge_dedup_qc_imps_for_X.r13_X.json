@@ -1,0 +1,9 @@
+{
+  "submerge.basename": "finngen_R13_chr",
+  "submerge.chr": "23",
+  "submerge.remove_samples": "gs://r13-data/qc_imputation/inputs/finngen_R13_dedup_sample_removals_release_with_min_pheno.txt",
+  "submerge.docker": "europe-docker.pkg.dev/finngen-refinery-dev/eu.gcr.io/bioinformatics:0.8.2",
+  "submerge.chunk_window": "5000000",
+  "submerge.dedup.docker": "europe-docker.pkg.dev/finngen-refinery-dev/eu.gcr.io/pftools:0.1.3",
+  "submerge.chr_vcfs_loc": "gs://r13-data/qc_imputation/inputs/r13_all_no_als_batch_chrX_loc"
+}

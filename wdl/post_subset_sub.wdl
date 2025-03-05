@@ -10,6 +10,8 @@ workflow subset_samples {
     File? duplicate_samples
     File? exclude_denials
 
+    Boolean add_batch_suffix = false
+
     String docker
 
     scatter( b in range(length(vcfs)) ) {
@@ -17,7 +19,8 @@ workflow subset_samples {
         ## good to make all this optional for other imputation tasks, at least at some point.
         call subset { input: vcf=vcfs[b], vcf_idx=vcf_idxs[b], already_excluded_samples=already_excluded_samples,
             duplicate_samples=duplicate_samples, sample_summaries=sample_summaries,
-            docker=docker, exclude_denials=exclude_denials
+            docker=docker, exclude_denials=exclude_denials,
+            add_batch_suffix=add_batch_suffix
         }
     }
 
@@ -32,6 +35,8 @@ task subset {
     File vcf_idx
     File sample_summaries
 
+    Boolean add_batch_suffix
+
     ## this is used only to see if some duplicates are not duplicates after qc.
     File already_excluded_samples
 
@@ -40,6 +45,8 @@ task subset {
     String docker
     String bn=basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
 
+    # If the vcf is coming from imputation, the batch name is the part before "_qcd_imputed_tags_edited"
+    String batch=sub(bn,"_qcd_imputed_tags_edited","")
 
     command <<<
         set -euxo pipefail
@@ -131,7 +138,24 @@ task subset {
 
         # index and add info tags
         echo "`date`\ttags"
-        bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        if ${add_batch_suffix}; then
+            bcftools +fill-tags ${bn}_temp.vcf.gz -Ov -- -t AF,AN,AC,AC_Hom,AC_Het,NS | \
+            awk '
+            BEGIN {
+                FS=OFS="\t"
+            }
+            /^##INFO/ {
+                $0=gensub(/<ID=(AF|AN|INFO|CHIP|AC_Het|AC_Hom|AC|HWE|NS),/, "<ID=\\1_${batch},", 1)
+            }
+            /^[^#]/ {
+                $8=gensub(/(AF|AN|INFO|CHIP|AC_Het|AC_Hom|AC|HWE|NS)=/, "\\1_${batch}=", "g", $8)
+            }
+            {
+                print
+            }' | bgzip > ${bn}_subset.vcf.gz
+        else
+            bcftools +fill-tags ${bn}_temp.vcf.gz -Oz -o ${bn}_subset.vcf.gz -- -t AF,AN,AC,AC_Hom,AC_Het,NS
+        fi
         echo "`date`\tindex vcf"
         tabix -p vcf ${bn}"_subset.vcf.gz"
         echo "`date`\tdone"

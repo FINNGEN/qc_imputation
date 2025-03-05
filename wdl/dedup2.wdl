@@ -1,11 +1,13 @@
-
+version 1.0
 
 workflow dedup {
 
-    String remove_samples
-    ## batches by chr order
-    Array[String] batch_files
-    String docker
+    input {
+        String remove_samples
+        ## batches by chr order
+        Array[String] batch_files
+        String docker
+    }
 
     scatter (f in batch_files) {
         call subset {
@@ -22,20 +24,23 @@ workflow dedup {
 }
 
 task subset {
-    File vcf
-    String bn = basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
-    File tbi=vcf+".tbi"
-    File removals
-    String docker
+
+    input {
+        File vcf
+        String bn = basename(sub(sub(sub(vcf,".vcf.gz",""),".vcf.bgz",""),".vcf",""))
+        File tbi=vcf+".tbi"
+        File removals
+        String docker
+    }
 
     Int disk_size = ceil(size(vcf, "GB")) * 2 + 5
-
+    
     command <<<
 
         set -x pipefail
         ## something silently "fails" in the next command although result is correct... had to drop -e from pipefail for now.
-        zcat ${vcf} | grep -m 1 '^#CHROM' | tr '\t' '\n' | tail -n+10 > included_samples
-        comm -12 <(sort -b ${removals} ) <(sort -b included_samples ) > included_to_be_removed
+        zcat ~{vcf} | grep -m 1 '^#CHROM' | tr '\t' '\n' | tail -n+10 > included_samples
+        comm -12 <(sort -b ~{removals} ) <(sort -b included_samples ) > included_to_be_removed
         n_rem=$(wc -l included_to_be_removed|awk '{ print $1}')
         if [[ $n_rem -eq 0 ]];
         then
@@ -45,9 +50,8 @@ task subset {
             echo "Subsetting "$n_rem" samples"
             cmd="bcftools view -S ^included_to_be_removed --force-samples -Ov"
         fi
-        $cmd ${vcf} | java -jar /tools/tagEditing_v1.1.jar AF: AN: AC: AC_Hom: AC_Het: NS: INFO: | bgzip -@ 2 > ${bn}"_subset.vcf.gz"
-        tabix -p vcf ${bn}"_subset.vcf.gz"
-
+        $cmd ~{vcf} | java -jar /tools/tagEditing_v1.1.jar AF: AN: AC: AC_Hom: AC_Het: NS: INFO: | bgzip -@ 2 > ~{bn}"_subset.vcf.gz"
+        tabix -p vcf ~{bn}"_subset.vcf.gz"
     >>>
 
     output {
@@ -58,7 +62,7 @@ task subset {
 
     runtime {
         docker: docker
-        memory: "8 GB"
+        memory: "7 GB"
         cpu: 4
         disks: "local-disk " + disk_size + " HDD"
         zones: "europe-west1-b europe-west1-c europe-west1-d"

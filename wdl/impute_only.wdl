@@ -27,7 +27,8 @@ workflow impute {
             batch_qc_exclude_variants=batch_qc_exclude_variants,
             panel_exclude_variants=panel_exclude_variants,
             exclude_samples=allbatches_samples_exclude,
-            ref_panel=ref_panel
+            ref_panel=ref_panel,
+            add_batch_suffix=false
         }
         # exclude duplicates (same sample with two different ids) and denials
         call post_subset_sub.subset_samples as subset_samples {
@@ -35,6 +36,7 @@ workflow impute {
             already_excluded_samples=allbatches_samples_exclude,
             exclude_denials=exclude_denials, duplicate_samples=duplicate_samples,
             sample_summaries=sample_summaries,
+            add_batch_suffix=true,
             docker=docker
         }
     }
