@@ -1,0 +1,29 @@
+{
+  "dedup.batch_files": [
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr1.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr2.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr3.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr4.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr5.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr6.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr7.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr8.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr9.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr10.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr11.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr12.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr13.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr14.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr15.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr16.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr17.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr18.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr19.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr20.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr21.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr22.vcf.gz",
+    "gs://r13-data/qc_imputation/outputs/merge_affy_legacy_fhrb_bpd_fsz/finngen_R13_chr23.vcf.gz"
+  ],
+  "dedup.remove_samples": "gs://r14-data/genotype/fhrb/R14_genotype_exclude_for_FHRB.txt",
+  "dedup.docker": "eu.gcr.io/finngen-refinery-dev/bioinformatics:0.8.2"
+}
